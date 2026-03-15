@@ -1,0 +1,2 @@
+# Test commit for GitHub Actions workflow
+# This file is safe to add and remove. Used to verify CI/CD pipeline triggers.
