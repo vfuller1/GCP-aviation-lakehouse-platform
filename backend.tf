@@ -1,6 +1,6 @@
 terraform {
   backend "gcs" {
-    bucket  = "lakehouse-gcp-state"
+    bucket  = "gcp-lakehouseproject-tfstate"
     prefix  = "terraform/state"
   }
 }
