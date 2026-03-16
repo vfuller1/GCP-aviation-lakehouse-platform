@@ -1,6 +1,6 @@
 variable "project_id" {
   description = "The GCP Project ID"
-  default     = "aviation-lakehouse-prod"
+  default     = "gcp-lakehouseproject"
 }
 
 variable "region" {

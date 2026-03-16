@@ -20,6 +20,8 @@ jobs:
           terraform_version: 1.6.6
 
 
+      # IMPORTANT: Update GCP_SA_KEY secret in GitHub to use the contents of gcp-lakehouseproject-fff9d6563167.json
+      #            Update GCP_PROJECT_ID secret to gcp-lakehouseproject
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
