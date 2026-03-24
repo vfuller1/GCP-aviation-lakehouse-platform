@@ -10,7 +10,12 @@ resource "databricks_mws_workspaces" "lakehouse" {
   account_id      = var.databricks_account_id
   workspace_name  = "lakehouse-demo"
   location        = var.region
-  cloud_resource_container = var.project_id
+
+  cloud_resource_container {
+    gcp {
+      project_id = var.project_id
+    }
+  }
 }
 
 # Add more Databricks resources as needed (clusters, jobs, etc.)
