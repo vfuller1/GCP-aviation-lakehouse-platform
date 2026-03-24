@@ -7,7 +7,16 @@ import {
 }
 
 import {
-  for_each = toset(["bronze", "silver", "gold"])
-  to       = google_storage_bucket.medallion_buckets[each.key]
-  id       = "${var.project_id}-${each.key}"
+  to = google_storage_bucket.medallion_buckets["bronze"]
+  id = "${var.project_id}-bronze"
+}
+
+import {
+  to = google_storage_bucket.medallion_buckets["silver"]
+  id = "${var.project_id}-silver"
+}
+
+import {
+  to = google_storage_bucket.medallion_buckets["gold"]
+  id = "${var.project_id}-gold"
 }
