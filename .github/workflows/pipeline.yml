@@ -166,15 +166,67 @@ jobs:
             done
           }
 
+          submit_notebook_run() {
+            local run_name="$1"
+            local task_key="$2"
+            local notebook_path="$3"
+            local spark_conf_json="$4"
+
+            PAYLOAD=$(jq -n \
+              --arg run_name "$run_name" \
+              --arg task_key "$task_key" \
+              --arg notebook_path "$notebook_path" \
+              --arg spark_version "13.3.x-scala2.12" \
+              --arg node_type_id "n1-standard-4" \
+              --argjson spark_conf "$spark_conf_json" \
+              '{
+                run_name: $run_name,
+                tasks: [
+                  {
+                    task_key: $task_key,
+                    notebook_task: {
+                      notebook_path: $notebook_path
+                    },
+                    new_cluster: {
+                      num_workers: 1,
+                      spark_version: $spark_version,
+                      node_type_id: $node_type_id,
+                      gcp_attributes: {
+                        use_preemptible_executors: true
+                      },
+                      spark_conf: $spark_conf
+                    }
+                  }
+                ]
+              }')
+
+            echo "Submitting one-off run for ${run_name} using notebook ${notebook_path}"
+            RUN_ID=$(curl -sS -X POST -H "Authorization: Bearer ${DBX_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "${DBX_HOST}/api/2.1/jobs/runs/submit" \
+              -d "$PAYLOAD" | jq -r '.run_id')
+
+            if [ -z "${RUN_ID}" ] || [ "${RUN_ID}" = "null" ]; then
+              echo "Failed to submit notebook run: ${run_name}"
+              return 1
+            fi
+
+            wait_for_run "${RUN_ID}"
+          }
+
           run_job_by_name() {
             local job_name="$1"
+            local task_key="$2"
+            local notebook_path="$3"
+            local spark_conf_json="$4"
 
             JOB_ID=$(curl -sS -H "Authorization: Bearer ${DBX_TOKEN}" \
               "${DBX_HOST}/api/2.1/jobs/list?name=${job_name}" | jq -r '.jobs[0].job_id')
 
             if [ -z "${JOB_ID}" ] || [ "${JOB_ID}" = "null" ]; then
-              echo "Job not found: ${job_name}"
-              return 1
+              echo "Job not found: ${job_name}; falling back to direct notebook submission."
+              submit_notebook_run "$job_name" "$task_key" "$notebook_path" "$spark_conf_json"
+              return 0
             fi
 
             echo "Triggering ${job_name} (job_id=${JOB_ID})"
@@ -191,6 +243,15 @@ jobs:
             wait_for_run "${RUN_ID}"
           }
 
-          run_job_by_name "aviation-bronze-to-silver"
-          run_job_by_name "aviation-silver-to-gold"
-          run_job_by_name "aviation-export-tables-to-gcs"
+          run_job_by_name "aviation-bronze-to-silver" \
+            "bronze_to_silver" \
+            "/aviation-pipeline/bronze_to_silver" \
+            '{"spark.gcp.project":"${{ env.PROJECT_ID }}"}'
+          run_job_by_name "aviation-silver-to-gold" \
+            "silver_to_gold" \
+            "/aviation-pipeline/silver_to_gold" \
+            '{"spark.gcp.project":"${{ env.PROJECT_ID }}","spark.datasource.bigquery.project":"${{ env.PROJECT_ID }}"}'
+          run_job_by_name "aviation-export-tables-to-gcs" \
+            "export_tables_to_gcs" \
+            "/aviation-pipeline/export_tables_to_gcs" \
+            '{"spark.gcp.project":"${{ env.PROJECT_ID }}"}'
