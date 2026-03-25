@@ -170,8 +170,7 @@ jobs:
               --arg content "$b64_content" \
               '{
                 path: $path,
-                format: "SOURCE",
-                language: "PYTHON",
+                format: "AUTO",
                 overwrite: true,
                 content: $content
               }')
