@@ -131,6 +131,68 @@ jobs:
             exit 0
           fi
 
+          DBX_USER=$(curl -sS -H "Authorization: Bearer ${DBX_TOKEN}" \
+            "${DBX_HOST}/api/2.0/preview/scim/v2/Me" | jq -r '.userName // .emails[0].value // empty')
+          if [ -z "${DBX_USER}" ]; then
+            echo "Unable to determine Databricks user from SCIM /Me."
+            exit 1
+          fi
+          WORKSPACE_NOTEBOOK_DIR="/Users/${DBX_USER}/aviation-pipeline"
+
+          ensure_workspace_dir() {
+            RESP=$(jq -n --arg path "$WORKSPACE_NOTEBOOK_DIR" '{path: $path}')
+            MKDIRS_RESP=$(curl -sS -X POST -H "Authorization: Bearer ${DBX_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "${DBX_HOST}/api/2.0/workspace/mkdirs" \
+              -d "$RESP")
+            if [ -n "${MKDIRS_RESP}" ] && [ "$(echo "$MKDIRS_RESP" | jq -r '.error_code // empty')" != "" ]; then
+              echo "Failed to ensure workspace directory ${WORKSPACE_NOTEBOOK_DIR}"
+              echo "$MKDIRS_RESP"
+              exit 1
+            fi
+          }
+
+          sync_workspace_notebook() {
+            local local_file="$1"
+            local workspace_path="$2"
+            local b64_content
+            local import_payload
+            local import_resp
+
+            if [ ! -f "$local_file" ]; then
+              echo "Local notebook file missing: $local_file"
+              exit 1
+            fi
+
+            b64_content=$(base64 -w 0 "$local_file")
+            import_payload=$(jq -n \
+              --arg path "$workspace_path" \
+              --arg content "$b64_content" \
+              '{
+                path: $path,
+                format: "SOURCE",
+                language: "PYTHON",
+                overwrite: true,
+                content: $content
+              }')
+
+            import_resp=$(curl -sS -X POST -H "Authorization: Bearer ${DBX_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "${DBX_HOST}/api/2.0/workspace/import" \
+              -d "$import_payload")
+
+            if [ -n "${import_resp}" ] && [ "$(echo "$import_resp" | jq -r '.error_code // empty')" != "" ]; then
+              echo "Failed to import notebook ${local_file} -> ${workspace_path}"
+              echo "$import_resp"
+              exit 1
+            fi
+          }
+
+          ensure_workspace_dir
+          sync_workspace_notebook "databricks_notebooks/bronze_to_silver.py" "${WORKSPACE_NOTEBOOK_DIR}/bronze_to_silver.py"
+          sync_workspace_notebook "databricks_notebooks/silver_to_gold.py" "${WORKSPACE_NOTEBOOK_DIR}/silver_to_gold.py"
+          sync_workspace_notebook "databricks_notebooks/export_tables_to_gcs.py" "${WORKSPACE_NOTEBOOK_DIR}/export_tables_to_gcs.py"
+
           wait_for_run() {
             local run_id="$1"
             local last_life=""
@@ -179,20 +241,16 @@ jobs:
             local requested_path="$1"
             local base_name="${requested_path##*/}"
             local base_name_py="$base_name"
-            local dbx_user
 
             if [[ "$base_name_py" != *.py ]]; then
               base_name_py="${base_name_py}.py"
             fi
 
-            dbx_user=$(curl -sS -H "Authorization: Bearer ${DBX_TOKEN}" \
-              "${DBX_HOST}/api/2.0/preview/scim/v2/Me" | jq -r '.userName // .emails[0].value // empty')
-
             for candidate in \
               "$requested_path" \
               "${requested_path}.py" \
-              "/Users/${dbx_user}/aviation-pipeline/${base_name}" \
-              "/Users/${dbx_user}/aviation-pipeline/${base_name_py}"
+              "${WORKSPACE_NOTEBOOK_DIR}/${base_name}" \
+              "${WORKSPACE_NOTEBOOK_DIR}/${base_name_py}"
             do
               if [ -n "$candidate" ] && workspace_path_exists "$candidate"; then
                 echo "$candidate"
