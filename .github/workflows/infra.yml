@@ -37,6 +37,15 @@ jobs:
         with:
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
+      - name: Enable prerequisite GCP APIs
+        run: |
+          gcloud services enable \
+            cloudresourcemanager.googleapis.com \
+            iam.googleapis.com \
+            container.googleapis.com \
+            artifactregistry.googleapis.com \
+            --project=${{ secrets.GCP_PROJECT_ID }}
+
       - name: Terraform Init
         run: terraform init
 
