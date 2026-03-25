@@ -1,8 +1,12 @@
-name: Deploy GCP Lakehouse Platform
+name: "Infra — Terraform Apply"
 
 on:
   push:
     branches: [ main ]
+    paths:
+      - "**.tf"
+      - ".terraform.lock.hcl"
+      - ".github/workflows/infra.yml"
   workflow_dispatch:
 
 jobs:
@@ -10,9 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/gcp-key.json
-      TF_VAR_databricks_host: ${{ secrets.DATABRICKS_HOST }}
-      TF_VAR_databricks_token: ${{ secrets.DATABRICKS_TOKEN }}
-      TF_VAR_databricks_account_id: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+      TF_VAR_databricks_host:         ${{ secrets.DATABRICKS_HOST }}
+      TF_VAR_databricks_token:        ${{ secrets.DATABRICKS_TOKEN }}
+      TF_VAR_databricks_account_id:   ${{ secrets.DATABRICKS_ACCOUNT_ID }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,9 +26,6 @@ jobs:
         with:
           terraform_version: 1.6.6
 
-
-      # IMPORTANT: Update GCP_SA_KEY secret in GitHub to use the contents of gcp-lakehouseproject-fff9d6563167.json
-      #            Update GCP_PROJECT_ID secret to gcp-lakehouseproject
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:

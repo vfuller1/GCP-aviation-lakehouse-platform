@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: aviation-ingest
+  namespace: aviation-pipeline
+  labels:
+    app.kubernetes.io/name: aviation-ingest
+    app.kubernetes.io/part-of: aviation-lakehouse
+    pipeline-stage: bronze
+spec:
+  # Run daily at 06:00 UTC
+  schedule: "0 6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: aviation-ingest
+        spec:
+          serviceAccountName: aviation-pipeline-sa
+          restartPolicy: OnFailure
+          containers:
+            - name: ingest
+              # Image is pushed by pipeline.yml GitHub Actions workflow
+              image: us-central1-docker.pkg.dev/gcp-lakehouseproject/aviation-pipeline/ingest:latest
+              imagePullPolicy: Always
+              env:
+                - name: GCP_PROJECT_ID
+                  value: "gcp-lakehouseproject"
+                - name: BRONZE_BUCKET
+                  value: "gcp-lakehouseproject-bronze"
+                - name: NUM_RECORDS
+                  value: "1000"
+              resources:
+                requests:
+                  cpu: "250m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"

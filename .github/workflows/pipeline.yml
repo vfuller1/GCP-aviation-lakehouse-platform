@@ -1,0 +1,87 @@
+name: "Pipeline — Build, Push & Deploy"
+# Triggered when ingest code, K8s manifests, or this workflow file change.
+# Builds the Kubernetes ingest container, pushes to Artifact Registry,
+# and applies the K8s manifests to the GKE Autopilot cluster.
+#
+# Prerequisites (GitHub Secrets required):
+#   GCP_SA_KEY       — service account JSON with roles:
+#                        artifactregistry.writer, container.developer
+#   GCP_PROJECT_ID   — gcp-lakehouseproject
+#   GKE_CLUSTER_NAME — aviation-pipeline
+#   GKE_REGION       — us-central1
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "pipeline/**"
+      - "k8s/**"
+      - ".github/workflows/pipeline.yml"
+  workflow_dispatch:
+
+env:
+  PROJECT_ID:    ${{ secrets.GCP_PROJECT_ID }}
+  REGION:        us-central1
+  REGISTRY:      us-central1-docker.pkg.dev
+  REPO:          aviation-pipeline
+  IMAGE:         ingest
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # GCP auth
+      # -----------------------------------------------------------------
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      # -----------------------------------------------------------------
+      # Docker — build & push ingest image to Artifact Registry
+      # -----------------------------------------------------------------
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build ingest image
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:latest \
+            pipeline/ingest/
+
+      - name: Push ingest image
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:latest
+
+      # -----------------------------------------------------------------
+      # GKE — apply Kubernetes manifests
+      # -----------------------------------------------------------------
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ secrets.GKE_CLUSTER_NAME }}
+          location:     ${{ env.REGION }}
+          project_id:   ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Apply K8s manifests
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/service-account.yaml
+          kubectl apply -f k8s/ingest-cronjob.yaml
+
+      - name: Update CronJob image to new SHA
+        run: |
+          kubectl set image cronjob/aviation-ingest \
+            ingest=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:${{ github.sha }} \
+            -n aviation-pipeline

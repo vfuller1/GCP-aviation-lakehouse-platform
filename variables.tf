@@ -35,3 +35,9 @@ variable "databricks_account_id" {
   default     = null
   nullable    = true
 }
+
+variable "enable_gke" {
+  description = "Enable GKE Autopilot cluster, Artifact Registry, and pipeline IAM resources"
+  type        = bool
+  default     = false
+}
