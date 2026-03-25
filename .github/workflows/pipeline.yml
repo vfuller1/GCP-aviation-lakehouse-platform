@@ -209,30 +209,37 @@ jobs:
             local task_key="$2"
             local notebook_path="$3"
             local resolved_path
+            local obj_type
 
             resolved_path=$(resolve_notebook_path "$notebook_path") || {
               echo "Unable to resolve notebook path for ${run_name}. Checked around ${notebook_path}."
               return 1
             }
 
+            obj_type=$(curl -sS -G -H "Authorization: Bearer ${DBX_TOKEN}" \
+              --data-urlencode "path=${resolved_path}" \
+              "${DBX_HOST}/api/2.0/workspace/get-status" | jq -r '.object_type // empty')
+
+            echo "Resolved: ${resolved_path} (object_type=${obj_type})"
+
+            if [ "$obj_type" = "NOTEBOOK" ]; then
+              TASK=$(jq -n --arg tk "$task_key" --arg np "$resolved_path" \
+                '{task_key: $tk, notebook_task: {notebook_path: $np}}')
+            else
+              TASK=$(jq -n --arg tk "$task_key" --arg pf "$resolved_path" \
+                '{task_key: $tk, spark_python_task: {python_file: $pf, source: "WORKSPACE"}}')
+            fi
+
             PAYLOAD=$(jq -n \
               --arg run_name "$run_name" \
-              --arg task_key "$task_key" \
-              --arg notebook_path "$resolved_path" \
+              --argjson task "$TASK" \
               '{
                 run_name: $run_name,
                 performance_target: "PERFORMANCE_OPTIMIZED",
-                tasks: [
-                  {
-                    task_key: $task_key,
-                    notebook_task: {
-                      notebook_path: $notebook_path
-                    }
-                  }
-                ]
+                tasks: [$task]
               }')
 
-            echo "Submitting one-off run for ${run_name} using notebook ${resolved_path}"
+            echo "Submitting one-off run for ${run_name} using ${obj_type:-FILE} at ${resolved_path}"
             RESP=$(curl -sS -X POST -H "Authorization: Bearer ${DBX_TOKEN}" \
               -H "Content-Type: application/json" \
               "${DBX_HOST}/api/2.1/jobs/runs/submit" \
@@ -241,7 +248,7 @@ jobs:
             RUN_ID=$(echo "$RESP" | jq -r '.run_id')
 
             if [ -z "${RUN_ID}" ] || [ "${RUN_ID}" = "null" ]; then
-              echo "Failed to submit notebook run: ${run_name}"
+              echo "Failed to submit run: ${run_name}"
               echo "$RESP"
               return 1
             fi
