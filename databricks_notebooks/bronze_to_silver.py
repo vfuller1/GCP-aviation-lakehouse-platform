@@ -4,13 +4,28 @@
 # Reads raw CSV files dropped by the Kubernetes ingest CronJob,
 # applies cleaning and type casting, and writes Parquet to the Silver bucket.
 
+import os
+
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import IntegerType, BooleanType, TimestampType
 
 spark = SparkSession.builder.getOrCreate()
 
-PROJECT_ID    = spark.conf.get("spark.gcp.project", "gcp-lakehouseproject")
+def get_project_id() -> str:
+    """Resolve GCP project from Spark conf with safe fallback for Serverless."""
+    for key in ["spark.gcp.project", "spark.hadoop.fs.gs.project.id"]:
+        try:
+            value = spark.conf.get(key)
+            if value:
+                return value
+        except Exception:
+            pass
+
+    return os.environ.get("GCP_PROJECT_ID", "gcp-lakehouseproject")
+
+
+PROJECT_ID    = get_project_id()
 BRONZE_BUCKET = f"gs://{PROJECT_ID}-bronze"
 SILVER_BUCKET = f"gs://{PROJECT_ID}-silver"
 

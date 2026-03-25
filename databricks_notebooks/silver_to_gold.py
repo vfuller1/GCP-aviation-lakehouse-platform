@@ -5,12 +5,27 @@
 # writes Gold Parquet, and loads the summary table into BigQuery via the
 # Spark BigQuery connector (bundled with Databricks Runtime 13.3+ on GCP).
 
+import os
+
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 spark = SparkSession.builder.getOrCreate()
 
-PROJECT_ID     = spark.conf.get("spark.gcp.project", "gcp-lakehouseproject")
+def get_project_id() -> str:
+    """Resolve GCP project from Spark conf with safe fallback for Serverless."""
+    for key in ["spark.gcp.project", "spark.hadoop.fs.gs.project.id"]:
+        try:
+            value = spark.conf.get(key)
+            if value:
+                return value
+        except Exception:
+            pass
+
+    return os.environ.get("GCP_PROJECT_ID", "gcp-lakehouseproject")
+
+
+PROJECT_ID     = get_project_id()
 SILVER_BUCKET  = f"gs://{PROJECT_ID}-silver"
 GOLD_BUCKET    = f"gs://{PROJECT_ID}-gold"
 BQ_DATASET     = "aviation_analytics"
