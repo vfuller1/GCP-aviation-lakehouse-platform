@@ -1,49 +1,24 @@
 # Databricks notebook: Silver → Gold (Curated Layer)
-# Stage: INTEGRATED (Silver) → CURATED / AGGREGATED (Gold) → BigQuery
+# Stage: INTEGRATED (Silver) → CURATED / AGGREGATED (Gold)
 #
-# Reads cleaned Parquet from Silver, computes business-level aggregations,
-# writes Gold Parquet, and loads the summary table into BigQuery via the
-# Spark BigQuery connector (bundled with Databricks Runtime 13.3+ on GCP).
-
-import os
+# Reads the cleaned Silver Delta table, computes business-level aggregations,
+# and writes a Gold summary Delta table (Serverless-compatible).
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 spark = SparkSession.builder.getOrCreate()
 
-def get_project_id() -> str:
-    """Resolve GCP project from Spark conf with safe fallback for Serverless."""
-    for key in ["spark.gcp.project", "spark.hadoop.fs.gs.project.id"]:
-        try:
-            value = spark.conf.get(key)
-            if value:
-                return value
-        except Exception:
-            pass
-
-    return os.environ.get("GCP_PROJECT_ID", "gcp-lakehouseproject")
-
-
-PROJECT_ID     = get_project_id()
-SILVER_BUCKET  = f"gs://{PROJECT_ID}-silver"
-GOLD_BUCKET    = f"gs://{PROJECT_ID}-gold"
-BQ_DATASET     = "aviation_analytics"
-BQ_TABLE       = f"{PROJECT_ID}.{BQ_DATASET}.flight_summary"
-TEMP_GCS_BUCKET = f"{PROJECT_ID}-gold"  # BigQuery connector uses GCS as a staging area
-
-# Supports both direct gs:// paths and Unity Catalog volume paths.
-# Example volume path:
-# /Volumes/main/aviation/silver/aviation/cleaned/
-# /Volumes/main/aviation/gold/aviation/aggregated/
-silver_path = os.environ.get("SILVER_INPUT_PATH", f"{SILVER_BUCKET}/aviation/cleaned/")
-gold_path = os.environ.get("GOLD_OUTPUT_PATH", f"{GOLD_BUCKET}/aviation/aggregated/")
-enable_bigquery_load = os.environ.get("ENABLE_BIGQUERY_LOAD", "false").lower() == "true"
+# ---------------------------------------------------------------------------
+# Unity Catalog tables (Serverless-compatible)
+# ---------------------------------------------------------------------------
+SILVER_TABLE = "workspace.aviation.silver_flights"
+GOLD_TABLE   = "workspace.aviation.gold_flight_summary"
 
 # ---------------------------------------------------------------------------
 # 1. Read Silver
 # ---------------------------------------------------------------------------
-df_silver = spark.read.parquet(silver_path)
+df_silver = spark.table(SILVER_TABLE)
 
 # ---------------------------------------------------------------------------
 # 2. Aggregations — four Gold views
@@ -123,30 +98,20 @@ df_gold = (
 )
 
 # ---------------------------------------------------------------------------
-# 4. Write Gold Parquet
+# 4. Write Gold Delta table
 # ---------------------------------------------------------------------------
 (
     df_gold
     .write
     .mode("overwrite")
-    .partitionBy("summary_type")
-    .parquet(gold_path)
+    .option("overwriteSchema", "true")
+    .saveAsTable(GOLD_TABLE)
 )
-print(f"[silver_to_gold] Wrote Gold Parquet → {gold_path}")
+print(f"[silver_to_gold] ✓ Wrote Gold summary → {GOLD_TABLE}")
 
 # ---------------------------------------------------------------------------
-# 5. Optionally load Gold into BigQuery (Spark BigQuery connector)
+# NOTE: BigQuery export removed — the Spark BigQuery connector requires GCS
+# staging (temporaryGcsBucket) which is not accessible from Serverless.
+# To export to BigQuery, use a Databricks Lakehouse Federation connection
+# or a scheduled job on a classic cluster with GCS credentials.
 # ---------------------------------------------------------------------------
-if enable_bigquery_load:
-    (
-        df_gold
-        .write
-        .format("bigquery")
-        .option("table",               BQ_TABLE)
-        .option("temporaryGcsBucket",  TEMP_GCS_BUCKET)
-        .mode("overwrite")
-        .save()
-    )
-    print(f"[silver_to_gold] Loaded Gold summary → BigQuery table {BQ_TABLE}")
-else:
-    print("[silver_to_gold] Skipped BigQuery load (set ENABLE_BIGQUERY_LOAD=true to enable)")

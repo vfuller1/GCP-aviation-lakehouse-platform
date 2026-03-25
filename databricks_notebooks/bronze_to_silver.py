@@ -1,10 +1,12 @@
 # Databricks notebook: Bronze → Silver (Integrated Layer)
 # Stage: RAW (Bronze) → CLEANED / INTEGRATED (Silver)
 #
-# Reads raw CSV files dropped by the Kubernetes ingest CronJob,
-# applies cleaning and type casting, and writes Parquet to the Silver bucket.
-
-import os
+# Reads raw CSV files from the Bronze Unity Catalog Volume,
+# applies cleaning and type casting, and writes a Delta table to Silver.
+#
+# Prerequisites:
+#   - Upload CSVs into /Volumes/workspace/aviation/bronze/raw/
+#     (e.g. via Kubernetes ingest CronJob, REST API, or dbutils.fs.cp)
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -12,33 +14,17 @@ from pyspark.sql.types import IntegerType, BooleanType, TimestampType
 
 spark = SparkSession.builder.getOrCreate()
 
-def get_project_id() -> str:
-    """Resolve GCP project from Spark conf with safe fallback for Serverless."""
-    for key in ["spark.gcp.project", "spark.hadoop.fs.gs.project.id"]:
-        try:
-            value = spark.conf.get(key)
-            if value:
-                return value
-        except Exception:
-            pass
-
-    return os.environ.get("GCP_PROJECT_ID", "gcp-lakehouseproject")
-
-
-PROJECT_ID    = get_project_id()
-BRONZE_BUCKET = f"gs://{PROJECT_ID}-bronze"
-SILVER_BUCKET = f"gs://{PROJECT_ID}-silver"
-
-# Supports both direct gs:// paths and Unity Catalog volume paths.
-# Example volume path:
-# /Volumes/main/aviation/bronze/aviation/raw/date=*/*.csv
-# /Volumes/main/aviation/silver/aviation/cleaned/
-bronze_path = os.environ.get("BRONZE_INPUT_PATH", f"{BRONZE_BUCKET}/aviation/raw/date=*/*.csv")
-silver_path = os.environ.get("SILVER_OUTPUT_PATH", f"{SILVER_BUCKET}/aviation/cleaned/")
+# ---------------------------------------------------------------------------
+# Unity Catalog paths (Serverless-compatible)
+# ---------------------------------------------------------------------------
+BRONZE_VOLUME = "/Volumes/workspace/aviation/bronze"
+SILVER_TABLE  = "workspace.aviation.silver_flights"
 
 # ---------------------------------------------------------------------------
-# 1. Read all date-partitioned raw files from Bronze
+# 1. Read all date-partitioned raw files from Bronze volume
 # ---------------------------------------------------------------------------
+bronze_path = f"{BRONZE_VOLUME}/raw/date=*/*.csv"
+
 df_raw = spark.read.option("header", True).csv(bronze_path)
 raw_count = df_raw.count()
 print(f"\n[bronze_to_silver] Raw Bronze count: {raw_count}")
@@ -68,7 +54,7 @@ df_clean = (
 )
 
 # ---------------------------------------------------------------------------
-# 4. Write to Silver as Parquet, partitioned by ingest_date
+# 4. Write to Silver as a Delta table, partitioned by ingest_date
 # ---------------------------------------------------------------------------
 clean_count = df_clean.count()
 rows_dropped = raw_count - clean_count
@@ -81,8 +67,9 @@ print(f"[bronze_to_silver] Quality metrics: {rows_dropped} rows removed ({qualit
     df_clean
     .write
     .mode("overwrite")
+    .option("overwriteSchema", "true")
     .partitionBy("ingest_date")
-    .parquet(silver_path)
+    .saveAsTable(SILVER_TABLE)
 )
 
-print(f"[bronze_to_silver] ✓ Wrote {clean_count} records → {silver_path}")
+print(f"[bronze_to_silver] ✓ Wrote {clean_count} records → {SILVER_TABLE}")
