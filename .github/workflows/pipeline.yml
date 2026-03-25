@@ -119,13 +119,6 @@ jobs:
               exit 1
             fi
 
-      - name: Verify Bronze landing files
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_ingest_now) }}
-        run: |
-          TODAY=$(date -u +%Y-%m-%d)
-          echo "Listing Bronze objects for date=${TODAY}"
-          gsutil ls -r "gs://${{ env.PROJECT_ID }}-bronze/aviation/raw/date=${TODAY}/**" || true
-
       - name: Run Databricks pipeline jobs (Bronze→Silver→Gold→Export)
         env:
           DBX_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -140,13 +133,19 @@ jobs:
 
           wait_for_run() {
             local run_id="$1"
+            local last_life=""
+            local last_result=""
             while true; do
               RESP=$(curl -sS -H "Authorization: Bearer ${DBX_TOKEN}" \
                 "${DBX_HOST}/api/2.1/jobs/runs/get?run_id=${run_id}")
 
               LIFE=$(echo "$RESP" | jq -r '.state.life_cycle_state')
               RESULT=$(echo "$RESP" | jq -r '.state.result_state // ""')
-              echo "run_id=${run_id} state=${LIFE} result=${RESULT}"
+              if [ "$LIFE" != "$last_life" ] || [ "$RESULT" != "$last_result" ]; then
+                echo "run_id=${run_id} state=${LIFE} result=${RESULT}"
+                last_life="$LIFE"
+                last_result="$RESULT"
+              fi
 
               if [ "$LIFE" = "TERMINATED" ]; then
                 if [ "$RESULT" = "SUCCESS" ]; then
@@ -223,8 +222,6 @@ jobs:
               --data-urlencode "path=${resolved_path}" \
               "${DBX_HOST}/api/2.0/workspace/get-status" | jq -r '.object_type // empty')
 
-            echo "Resolved: ${resolved_path} (object_type=${obj_type})"
-
             if [ "$obj_type" = "NOTEBOOK" ]; then
               task_json=$(jq -n --arg tk "$task_key" --arg np "$resolved_path" \
                 '{task_key: $tk, notebook_task: {notebook_path: $np}}')
@@ -266,7 +263,7 @@ jobs:
                 }')
             fi
 
-            echo "Submitting one-off run for ${run_name} using ${obj_type:-FILE} at ${resolved_path}"
+            echo "Submitting one-off run for ${run_name}"
             RESP=$(curl -sS -X POST -H "Authorization: Bearer ${DBX_TOKEN}" \
               -H "Content-Type: application/json" \
               "${DBX_HOST}/api/2.1/jobs/runs/submit" \
@@ -292,7 +289,7 @@ jobs:
               "${DBX_HOST}/api/2.1/jobs/list?name=${job_name}" | jq -r '.jobs[0].job_id')
 
             if [ -z "${JOB_ID}" ] || [ "${JOB_ID}" = "null" ]; then
-              echo "Job not found: ${job_name}; falling back to direct notebook submission."
+              echo "Job not found: ${job_name}; using one-off run."
               submit_notebook_run "$job_name" "$task_key" "$notebook_path"
               return 0
             fi
@@ -320,10 +317,3 @@ jobs:
           run_job_by_name "aviation-export-tables-to-gcs" \
             "export_tables_to_gcs" \
             "/aviation-pipeline/export_tables_to_gcs"
-
-      - name: Verify Silver and Gold export objects
-        run: |
-          echo "Listing Silver export objects"
-          gsutil ls -r "gs://${{ env.PROJECT_ID }}-silver/aviation/cleaned/**" || true
-          echo "Listing Gold export objects"
-          gsutil ls -r "gs://${{ env.PROJECT_ID }}-gold/aviation/aggregated/**" || true
