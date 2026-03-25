@@ -77,6 +77,8 @@ resource "google_service_account_iam_member" "pipeline_workload_identity" {
   service_account_id = google_service_account.pipeline_sa[0].name
   role               = "roles/iam.workloadIdentityUser"
   member             = "serviceAccount:${var.project_id}.svc.id.goog[aviation-pipeline/aviation-pipeline-sa]"
+
+  depends_on = [google_container_cluster.aviation_pipeline]
 }
 
 # ---------------------------------------------------------------------------
