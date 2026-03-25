@@ -210,6 +210,8 @@ jobs:
             local notebook_path="$3"
             local resolved_path
             local obj_type
+            local task_json
+            local payload_json
 
             resolved_path=$(resolve_notebook_path "$notebook_path") || {
               echo "Unable to resolve notebook path for ${run_name}. Checked around ${notebook_path}."
@@ -223,27 +225,51 @@ jobs:
             echo "Resolved: ${resolved_path} (object_type=${obj_type})"
 
             if [ "$obj_type" = "NOTEBOOK" ]; then
-              TASK=$(jq -n --arg tk "$task_key" --arg np "$resolved_path" \
+              task_json=$(jq -n --arg tk "$task_key" --arg np "$resolved_path" \
                 '{task_key: $tk, notebook_task: {notebook_path: $np}}')
-            else
-              TASK=$(jq -n --arg tk "$task_key" --arg pf "$resolved_path" \
-                '{task_key: $tk, spark_python_task: {python_file: $pf, source: "WORKSPACE"}}')
-            fi
 
-            PAYLOAD=$(jq -n \
-              --arg run_name "$run_name" \
-              --argjson task "$TASK" \
-              '{
-                run_name: $run_name,
-                performance_target: "PERFORMANCE_OPTIMIZED",
-                tasks: [$task]
-              }')
+              payload_json=$(jq -n \
+                --arg run_name "$run_name" \
+                --argjson task "$task_json" \
+                '{
+                  run_name: $run_name,
+                  performance_target: "PERFORMANCE_OPTIMIZED",
+                  tasks: [$task]
+                }')
+            else
+              task_json=$(jq -n --arg tk "$task_key" --arg pf "$resolved_path" \
+                '{
+                  task_key: $tk,
+                  environment_key: "default_python",
+                  spark_python_task: {
+                    python_file: $pf,
+                    source: "WORKSPACE"
+                  }
+                }')
+
+              payload_json=$(jq -n \
+                --arg run_name "$run_name" \
+                --argjson task "$task_json" \
+                '{
+                  run_name: $run_name,
+                  performance_target: "PERFORMANCE_OPTIMIZED",
+                  environments: [
+                    {
+                      environment_key: "default_python",
+                      spec: {
+                        environment_version: "4"
+                      }
+                    }
+                  ],
+                  tasks: [$task]
+                }')
+            fi
 
             echo "Submitting one-off run for ${run_name} using ${obj_type:-FILE} at ${resolved_path}"
             RESP=$(curl -sS -X POST -H "Authorization: Bearer ${DBX_TOKEN}" \
               -H "Content-Type: application/json" \
               "${DBX_HOST}/api/2.1/jobs/runs/submit" \
-              -d "$PAYLOAD")
+              -d "$payload_json")
 
             RUN_ID=$(echo "$RESP" | jq -r '.run_id')
 
