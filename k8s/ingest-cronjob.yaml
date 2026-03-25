@@ -35,6 +35,8 @@ spec:
                   value: "gcp-lakehouseproject-bronze"
                 - name: NUM_RECORDS
                   value: "1000"
+                - name: BAD_DATA_RATE
+                  value: "0.02"
               resources:
                 requests:
                   cpu: "250m"

@@ -20,6 +20,7 @@ from google.cloud import storage
 PROJECT_ID   = os.environ.get("GCP_PROJECT_ID", "gcp-lakehouseproject")
 BRONZE_BUCKET = os.environ.get("BRONZE_BUCKET", f"{PROJECT_ID}-bronze")
 NUM_RECORDS  = int(os.environ.get("NUM_RECORDS", "1000"))
+BAD_DATA_RATE = float(os.environ.get("BAD_DATA_RATE", "0.0"))
 
 AIRLINES = ["AA", "DL", "UA", "WN", "B6", "AS", "NK", "F9", "G4", "HA"]
 AIRPORTS = [
@@ -57,11 +58,43 @@ def generate_record() -> dict:
     }
 
 
+def inject_bad_data(record: dict) -> dict:
+    bad_record = dict(record)
+    corruption_type = random.choice([
+        "missing_flight_id",
+        "missing_airline",
+        "missing_origin",
+        "missing_destination",
+        "missing_event_ts",
+    ])
+
+    if corruption_type == "missing_flight_id":
+        bad_record["flight_id"] = ""
+    elif corruption_type == "missing_airline":
+        bad_record["airline"] = ""
+    elif corruption_type == "missing_origin":
+        bad_record["origin"] = ""
+    elif corruption_type == "missing_destination":
+        bad_record["destination"] = ""
+    else:
+        bad_record["event_ts"] = ""
+
+    return bad_record
+
+
 def main() -> None:
     today = datetime.utcnow().strftime("%Y-%m-%d")
     gcs_path = f"aviation/raw/date={today}/flights.csv"
 
-    records = [generate_record() for _ in range(NUM_RECORDS)]
+    records = []
+    bad_rows = 0
+
+    for _ in range(NUM_RECORDS):
+        record = generate_record()
+        if BAD_DATA_RATE > 0 and random.random() < BAD_DATA_RATE:
+            record = inject_bad_data(record)
+            bad_rows += 1
+        records.append(record)
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=records[0].keys())
@@ -73,7 +106,10 @@ def main() -> None:
     blob   = bucket.blob(gcs_path)
     blob.upload_from_string(buf.getvalue(), content_type="text/csv")
 
-    print(f"[ingest] Uploaded {NUM_RECORDS} records → gs://{BRONZE_BUCKET}/{gcs_path}")
+    print(
+        f"[ingest] Uploaded {NUM_RECORDS} records (bad_rows={bad_rows}, bad_data_rate={BAD_DATA_RATE}) "
+        f"→ gs://{BRONZE_BUCKET}/{gcs_path}"
+    )
 
 
 if __name__ == "__main__":
