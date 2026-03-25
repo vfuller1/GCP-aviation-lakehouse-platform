@@ -44,35 +44,17 @@ resource "databricks_notebook" "export_tables_to_gcs" {
 }
 
 # ---------------------------------------------------------------------------
-# Jobs — one job per transformation stage (Bronze→Silver, Silver→Gold)
-# Each job spins up a small ephemeral job cluster to keep costs low.
-# The Spark BigQuery connector is pre-installed on Databricks Runtime 13.3+
-# when running on GCP (no extra library needed for the silver→gold BQ write).
+# Jobs — one job per transformation stage (Bronze→Silver, Silver→Gold, Export)
+# This workspace supports serverless jobs only, so tasks intentionally omit
+# all cluster settings and rely on Databricks serverless compute.
 # ---------------------------------------------------------------------------
 resource "databricks_job" "bronze_to_silver" {
-  count = var.enable_databricks ? 1 : 0
-  name  = "aviation-bronze-to-silver"
-
-  job_cluster {
-    job_cluster_key = "aviation-cluster"
-    new_cluster {
-      num_workers   = 1
-      spark_version = "13.3.x-scala2.12"
-      node_type_id  = "n1-standard-4"
-
-      gcp_attributes {
-        use_preemptible_executors = true
-      }
-
-      spark_conf = {
-        "spark.gcp.project" = var.project_id
-      }
-    }
-  }
+  count              = var.enable_databricks ? 1 : 0
+  name               = "aviation-bronze-to-silver"
+  performance_target = "PERFORMANCE_OPTIMIZED"
 
   task {
-    task_key        = "bronze_to_silver"
-    job_cluster_key = "aviation-cluster"
+    task_key = "bronze_to_silver"
 
     notebook_task {
       notebook_path = databricks_notebook.bronze_to_silver[0].path
@@ -81,30 +63,12 @@ resource "databricks_job" "bronze_to_silver" {
 }
 
 resource "databricks_job" "silver_to_gold" {
-  count = var.enable_databricks ? 1 : 0
-  name  = "aviation-silver-to-gold"
-
-  job_cluster {
-    job_cluster_key = "aviation-cluster"
-    new_cluster {
-      num_workers   = 1
-      spark_version = "13.3.x-scala2.12"
-      node_type_id  = "n1-standard-4"
-
-      gcp_attributes {
-        use_preemptible_executors = true
-      }
-
-      spark_conf = {
-        "spark.gcp.project"            = var.project_id
-        "spark.datasource.bigquery.project" = var.project_id
-      }
-    }
-  }
+  count              = var.enable_databricks ? 1 : 0
+  name               = "aviation-silver-to-gold"
+  performance_target = "PERFORMANCE_OPTIMIZED"
 
   task {
-    task_key        = "silver_to_gold"
-    job_cluster_key = "aviation-cluster"
+    task_key = "silver_to_gold"
 
     notebook_task {
       notebook_path = databricks_notebook.silver_to_gold[0].path
@@ -113,29 +77,12 @@ resource "databricks_job" "silver_to_gold" {
 }
 
 resource "databricks_job" "export_tables_to_gcs" {
-  count = var.enable_databricks ? 1 : 0
-  name  = "aviation-export-tables-to-gcs"
-
-  job_cluster {
-    job_cluster_key = "aviation-cluster"
-    new_cluster {
-      num_workers   = 1
-      spark_version = "13.3.x-scala2.12"
-      node_type_id  = "n1-standard-4"
-
-      gcp_attributes {
-        use_preemptible_executors = true
-      }
-
-      spark_conf = {
-        "spark.gcp.project" = var.project_id
-      }
-    }
-  }
+  count              = var.enable_databricks ? 1 : 0
+  name               = "aviation-export-tables-to-gcs"
+  performance_target = "PERFORMANCE_OPTIMIZED"
 
   task {
-    task_key        = "export_tables_to_gcs"
-    job_cluster_key = "aviation-cluster"
+    task_key = "export_tables_to_gcs"
 
     notebook_task {
       notebook_path = databricks_notebook.export_tables_to_gcs[0].path

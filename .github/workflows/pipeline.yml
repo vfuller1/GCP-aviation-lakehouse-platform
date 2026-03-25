@@ -169,27 +169,15 @@ jobs:
           submit_notebook_run() {
             local run_name="$1"
             local notebook_path="$2"
-            local spark_conf_json="$3"
 
             PAYLOAD=$(jq -n \
               --arg run_name "$run_name" \
               --arg notebook_path "$notebook_path" \
-              --arg spark_version "13.3.x-scala2.12" \
-              --arg node_type_id "n1-standard-4" \
-              --argjson spark_conf "$spark_conf_json" \
               '{
                 run_name: $run_name,
+                performance_target: "PERFORMANCE_OPTIMIZED",
                 notebook_task: {
                   notebook_path: $notebook_path
-                },
-                new_cluster: {
-                  num_workers: 1,
-                  spark_version: $spark_version,
-                  node_type_id: $node_type_id,
-                  gcp_attributes: {
-                    use_preemptible_executors: true
-                  },
-                  spark_conf: $spark_conf
                 }
               }')
 
@@ -214,14 +202,13 @@ jobs:
             local job_name="$1"
             local task_key="$2"
             local notebook_path="$3"
-            local spark_conf_json="$4"
 
             JOB_ID=$(curl -sS -H "Authorization: Bearer ${DBX_TOKEN}" \
               "${DBX_HOST}/api/2.1/jobs/list?name=${job_name}" | jq -r '.jobs[0].job_id')
 
             if [ -z "${JOB_ID}" ] || [ "${JOB_ID}" = "null" ]; then
               echo "Job not found: ${job_name}; falling back to direct notebook submission."
-              submit_notebook_run "$job_name" "$notebook_path" "$spark_conf_json"
+              submit_notebook_run "$job_name" "$notebook_path"
               return 0
             fi
 
@@ -241,13 +228,10 @@ jobs:
 
           run_job_by_name "aviation-bronze-to-silver" \
             "bronze_to_silver" \
-            "/aviation-pipeline/bronze_to_silver" \
-            '{"spark.gcp.project":"${{ env.PROJECT_ID }}"}'
+            "/aviation-pipeline/bronze_to_silver"
           run_job_by_name "aviation-silver-to-gold" \
             "silver_to_gold" \
-            "/aviation-pipeline/silver_to_gold" \
-            '{"spark.gcp.project":"${{ env.PROJECT_ID }}","spark.datasource.bigquery.project":"${{ env.PROJECT_ID }}"}'
+            "/aviation-pipeline/silver_to_gold"
           run_job_by_name "aviation-export-tables-to-gcs" \
             "export_tables_to_gcs" \
-            "/aviation-pipeline/export_tables_to_gcs" \
-            '{"spark.gcp.project":"${{ env.PROJECT_ID }}"}'
+            "/aviation-pipeline/export_tables_to_gcs"
