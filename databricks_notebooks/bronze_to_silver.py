@@ -21,6 +21,8 @@ bronze_path = f"{BRONZE_BUCKET}/aviation/raw/date=*/*.csv"
 silver_path = f"{SILVER_BUCKET}/aviation/cleaned/"
 
 df_raw = spark.read.option("header", True).csv(bronze_path)
+raw_count = df_raw.count()
+print(f"\n[bronze_to_silver] Raw Bronze count: {raw_count}")
 
 # ---------------------------------------------------------------------------
 # 2. Cast types, derive columns, drop nulls
@@ -49,6 +51,13 @@ df_clean = (
 # ---------------------------------------------------------------------------
 # 4. Write to Silver as Parquet, partitioned by ingest_date
 # ---------------------------------------------------------------------------
+clean_count = df_clean.count()
+rows_dropped = raw_count - clean_count
+quality_pct = 100 * rows_dropped / raw_count if raw_count > 0 else 0
+
+print(f"[bronze_to_silver] Clean Silver count: {clean_count}")
+print(f"[bronze_to_silver] Quality metrics: {rows_dropped} rows removed ({quality_pct:.1f}%)")
+
 (
     df_clean
     .write
@@ -57,4 +66,4 @@ df_clean = (
     .parquet(silver_path)
 )
 
-print(f"[bronze_to_silver] Wrote {df_clean.count()} records → {silver_path}")
+print(f"[bronze_to_silver] ✓ Wrote {clean_count} records → {silver_path}")
