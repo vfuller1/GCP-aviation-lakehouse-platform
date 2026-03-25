@@ -29,12 +29,16 @@ PROJECT_ID    = get_project_id()
 BRONZE_BUCKET = f"gs://{PROJECT_ID}-bronze"
 SILVER_BUCKET = f"gs://{PROJECT_ID}-silver"
 
+# Supports both direct gs:// paths and Unity Catalog volume paths.
+# Example volume path:
+# /Volumes/main/aviation/bronze/aviation/raw/date=*/*.csv
+# /Volumes/main/aviation/silver/aviation/cleaned/
+bronze_path = os.environ.get("BRONZE_INPUT_PATH", f"{BRONZE_BUCKET}/aviation/raw/date=*/*.csv")
+silver_path = os.environ.get("SILVER_OUTPUT_PATH", f"{SILVER_BUCKET}/aviation/cleaned/")
+
 # ---------------------------------------------------------------------------
 # 1. Read all date-partitioned raw files from Bronze
 # ---------------------------------------------------------------------------
-bronze_path = f"{BRONZE_BUCKET}/aviation/raw/date=*/*.csv"
-silver_path = f"{SILVER_BUCKET}/aviation/cleaned/"
-
 df_raw = spark.read.option("header", True).csv(bronze_path)
 raw_count = df_raw.count()
 print(f"\n[bronze_to_silver] Raw Bronze count: {raw_count}")

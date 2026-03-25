@@ -32,8 +32,13 @@ BQ_DATASET     = "aviation_analytics"
 BQ_TABLE       = f"{PROJECT_ID}.{BQ_DATASET}.flight_summary"
 TEMP_GCS_BUCKET = f"{PROJECT_ID}-gold"  # BigQuery connector uses GCS as a staging area
 
-silver_path = f"{SILVER_BUCKET}/aviation/cleaned/"
-gold_path   = f"{GOLD_BUCKET}/aviation/aggregated/"
+# Supports both direct gs:// paths and Unity Catalog volume paths.
+# Example volume path:
+# /Volumes/main/aviation/silver/aviation/cleaned/
+# /Volumes/main/aviation/gold/aviation/aggregated/
+silver_path = os.environ.get("SILVER_INPUT_PATH", f"{SILVER_BUCKET}/aviation/cleaned/")
+gold_path = os.environ.get("GOLD_OUTPUT_PATH", f"{GOLD_BUCKET}/aviation/aggregated/")
+enable_bigquery_load = os.environ.get("ENABLE_BIGQUERY_LOAD", "false").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # 1. Read Silver
@@ -130,15 +135,18 @@ df_gold = (
 print(f"[silver_to_gold] Wrote Gold Parquet → {gold_path}")
 
 # ---------------------------------------------------------------------------
-# 5. Load Gold into BigQuery (Spark BigQuery connector)
+# 5. Optionally load Gold into BigQuery (Spark BigQuery connector)
 # ---------------------------------------------------------------------------
-(
-    df_gold
-    .write
-    .format("bigquery")
-    .option("table",               BQ_TABLE)
-    .option("temporaryGcsBucket",  TEMP_GCS_BUCKET)
-    .mode("overwrite")
-    .save()
-)
-print(f"[silver_to_gold] Loaded Gold summary → BigQuery table {BQ_TABLE}")
+if enable_bigquery_load:
+    (
+        df_gold
+        .write
+        .format("bigquery")
+        .option("table",               BQ_TABLE)
+        .option("temporaryGcsBucket",  TEMP_GCS_BUCKET)
+        .mode("overwrite")
+        .save()
+    )
+    print(f"[silver_to_gold] Loaded Gold summary → BigQuery table {BQ_TABLE}")
+else:
+    print("[silver_to_gold] Skipped BigQuery load (set ENABLE_BIGQUERY_LOAD=true to enable)")
