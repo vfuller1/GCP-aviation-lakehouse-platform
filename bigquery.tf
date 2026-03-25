@@ -91,3 +91,24 @@ resource "google_bigquery_table" "bi_daily_delays_v" {
     SQL
   }
 }
+
+# BI view: pipeline refresh/status snapshot for dashboard freshness checks.
+resource "google_bigquery_table" "bi_pipeline_refresh_v" {
+  dataset_id = google_bigquery_dataset.analytics_layer.dataset_id
+  table_id   = "bi_pipeline_refresh_v"
+
+  view {
+    use_legacy_sql = false
+    query = <<-SQL
+      SELECT
+        MAX(generated_ts) AS last_generated_ts,
+        COUNT(*) AS gold_summary_rows,
+        COUNTIF(summary_type = 'by_airline') AS airline_rows,
+        COUNTIF(summary_type = 'by_route') AS route_rows,
+        COUNTIF(summary_type = 'delayed_by_day') AS delayed_day_rows,
+        COUNTIF(summary_type = 'on_time_pct') AS on_time_rows,
+        SUM(total_flights) AS total_flights_across_summaries
+      FROM `${var.project_id}.${google_bigquery_dataset.analytics_layer.dataset_id}.${google_bigquery_table.gold_summary_ext.table_id}`
+    SQL
+  }
+}
