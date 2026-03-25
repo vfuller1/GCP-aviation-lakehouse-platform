@@ -123,7 +123,8 @@ jobs:
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_ingest_now) }}
         run: |
           TODAY=$(date -u +%Y-%m-%d)
-          gsutil ls "gs://${{ env.PROJECT_ID }}-bronze/aviation/raw/date=${TODAY}/" || true
+          echo "Listing Bronze objects for date=${TODAY}"
+          gsutil ls -r "gs://${{ env.PROJECT_ID }}-bronze/aviation/raw/date=${TODAY}/**" || true
 
       - name: Run Databricks pipeline jobs (Bronze→Silver→Gold→Export)
         env:
@@ -319,3 +320,10 @@ jobs:
           run_job_by_name "aviation-export-tables-to-gcs" \
             "export_tables_to_gcs" \
             "/aviation-pipeline/export_tables_to_gcs"
+
+      - name: Verify Silver and Gold export objects
+        run: |
+          echo "Listing Silver export objects"
+          gsutil ls -r "gs://${{ env.PROJECT_ID }}-silver/aviation/cleaned/**" || true
+          echo "Listing Gold export objects"
+          gsutil ls -r "gs://${{ env.PROJECT_ID }}-gold/aviation/aggregated/**" || true
