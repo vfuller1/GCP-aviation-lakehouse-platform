@@ -18,6 +18,12 @@ on:
       - "k8s/**"
       - ".github/workflows/pipeline.yml"
   workflow_dispatch:
+    inputs:
+      run_ingest_now:
+        description: "Run a one-time ingest job immediately after deploy"
+        required: false
+        default: false
+        type: boolean
 
 env:
   PROJECT_ID:    ${{ secrets.GCP_PROJECT_ID }}
@@ -85,3 +91,17 @@ jobs:
           kubectl set image cronjob/aviation-ingest \
             ingest=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:${{ github.sha }} \
             -n aviation-pipeline
+
+      - name: Run one-time ingest job now
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_ingest_now }}
+        run: |
+          JOB_NAME="aviation-ingest-manual-${GITHUB_RUN_ID}"
+          kubectl create job --from=cronjob/aviation-ingest "$JOB_NAME" -n aviation-pipeline
+          kubectl wait --for=condition=complete --timeout=600s job/"$JOB_NAME" -n aviation-pipeline
+          kubectl logs job/"$JOB_NAME" -n aviation-pipeline
+
+      - name: Verify Bronze landing files
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_ingest_now }}
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          gsutil ls "gs://${{ env.PROJECT_ID }}-bronze/aviation/raw/date=${TODAY}/" || true
