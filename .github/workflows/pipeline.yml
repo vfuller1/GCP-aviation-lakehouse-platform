@@ -101,7 +101,7 @@ jobs:
             echo "Waiting for job ${JOB_NAME} to complete..."
             for i in $(seq 1 60); do
               STATUS=$(kubectl get job "$JOB_NAME" -n aviation-pipeline -o jsonpath='{.status.conditions[0].type}' 2>/dev/null || echo "")
-              if [ "$STATUS" = "Complete" ]; then
+              if [ "$STATUS" = "Complete" ] || [ "$STATUS" = "SuccessCriteriaMet" ]; then
                 echo "Job completed successfully."
                 kubectl logs job/"$JOB_NAME" -n aviation-pipeline || true
                 break
@@ -113,7 +113,7 @@ jobs:
               echo "  [${i}/60] status=${STATUS:-Pending} — sleeping 10s..."
               sleep 10
             done
-            if [ "$STATUS" != "Complete" ]; then
+            if [ "$STATUS" != "Complete" ] && [ "$STATUS" != "SuccessCriteriaMet" ]; then
               echo "Job did not complete within 10 minutes. Logs:"
               kubectl logs job/"$JOB_NAME" -n aviation-pipeline || true
               exit 1
