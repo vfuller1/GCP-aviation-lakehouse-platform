@@ -166,15 +166,59 @@ jobs:
             done
           }
 
+          workspace_path_exists() {
+            local candidate="$1"
+            RESP=$(curl -sS -G -H "Authorization: Bearer ${DBX_TOKEN}" \
+              --data-urlencode "path=${candidate}" \
+              "${DBX_HOST}/api/2.0/workspace/get-status")
+            OBJ_TYPE=$(echo "$RESP" | jq -r '.object_type // empty')
+            [ -n "$OBJ_TYPE" ]
+          }
+
+          resolve_notebook_path() {
+            local requested_path="$1"
+            local base_name="${requested_path##*/}"
+            local base_name_py="$base_name"
+            local dbx_user
+
+            if [[ "$base_name_py" != *.py ]]; then
+              base_name_py="${base_name_py}.py"
+            fi
+
+            dbx_user=$(curl -sS -H "Authorization: Bearer ${DBX_TOKEN}" \
+              "${DBX_HOST}/api/2.0/preview/scim/v2/Me" | jq -r '.userName // .emails[0].value // empty')
+
+            for candidate in \
+              "$requested_path" \
+              "${requested_path}.py" \
+              "/Users/${dbx_user}/aviation-pipeline/${base_name}" \
+              "/Users/${dbx_user}/aviation-pipeline/${base_name_py}"
+            do
+              if [ -n "$candidate" ] && workspace_path_exists "$candidate"; then
+                echo "$candidate"
+                return 0
+              fi
+            done
+
+            echo "$requested_path"
+            return 1
+          }
+
           submit_notebook_run() {
             local run_name="$1"
             local task_key="$2"
             local notebook_path="$3"
+            local resolved_path
+
+            resolved_path=$(resolve_notebook_path "$notebook_path") || {
+              echo "Unable to resolve notebook path for ${run_name}. Checked around ${notebook_path}."
+              return 1
+            }
 
             PAYLOAD=$(jq -n \
               --arg run_name "$run_name" \
               --arg task_key "$task_key" \
-              --arg notebook_path "$notebook_path" \
+              --arg notebook_path "$resolved_path" \
               '{
                 run_name: $run_name,
                 performance_target: "PERFORMANCE_OPTIMIZED",
@@ -188,7 +232,7 @@ jobs:
                 ]
               }')
 
-            echo "Submitting one-off run for ${run_name} using notebook ${notebook_path}"
+            echo "Submitting one-off run for ${run_name} using notebook ${resolved_path}"
             RESP=$(curl -sS -X POST -H "Authorization: Bearer ${DBX_TOKEN}" \
               -H "Content-Type: application/json" \
               "${DBX_HOST}/api/2.1/jobs/runs/submit" \

@@ -6,6 +6,8 @@ provider "databricks" {
   token = var.databricks_token
 }
 
+data "databricks_current_user" "me" {}
+
 resource "databricks_mws_workspaces" "lakehouse" {
   count          = var.enable_databricks ? 1 : 0
   account_id     = var.databricks_account_id
@@ -24,21 +26,21 @@ resource "databricks_mws_workspaces" "lakehouse" {
 # ---------------------------------------------------------------------------
 resource "databricks_notebook" "bronze_to_silver" {
   count    = var.enable_databricks ? 1 : 0
-  path     = "/aviation-pipeline/bronze_to_silver"
+  path     = "${data.databricks_current_user.me.home}/aviation-pipeline/bronze_to_silver.py"
   language = "PYTHON"
   source   = "${path.module}/databricks_notebooks/bronze_to_silver.py"
 }
 
 resource "databricks_notebook" "silver_to_gold" {
   count    = var.enable_databricks ? 1 : 0
-  path     = "/aviation-pipeline/silver_to_gold"
+  path     = "${data.databricks_current_user.me.home}/aviation-pipeline/silver_to_gold.py"
   language = "PYTHON"
   source   = "${path.module}/databricks_notebooks/silver_to_gold.py"
 }
 
 resource "databricks_notebook" "export_tables_to_gcs" {
   count    = var.enable_databricks ? 1 : 0
-  path     = "/aviation-pipeline/export_tables_to_gcs"
+  path     = "${data.databricks_current_user.me.home}/aviation-pipeline/export_tables_to_gcs.py"
   language = "PYTHON"
   source   = "${path.module}/databricks_notebooks/export_tables_to_gcs.py"
 }
