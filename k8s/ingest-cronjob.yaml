@@ -37,6 +37,20 @@ spec:
                   value: "1000"
                 - name: BAD_DATA_RATE
                   value: "0.02"
+                - name: ENABLE_RAG_DOC_EXPORT
+                  value: "false"
+                - name: ENABLE_VERTEX_EMBEDDINGS
+                  value: "false"
+                - name: AI_ARTIFACTS_BUCKET
+                  value: "gcp-lakehouseproject-ai"
+                - name: VERTEX_REGION
+                  value: "us-central1"
+                - name: VERTEX_EMBEDDING_MODEL
+                  value: "text-embedding-005"
+                - name: BQ_DATASET
+                  value: "aviation_analytics"
+                - name: BQ_RAG_TABLE
+                  value: "ai_rag_documents"
               resources:
                 requests:
                   cpu: "250m"

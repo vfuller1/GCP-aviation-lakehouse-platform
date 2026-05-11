@@ -7,6 +7,7 @@ Stage: SOURCE → BRONZE (raw landing zone)
 
 import csv
 import io
+import json
 import os
 import random
 import uuid
@@ -21,6 +22,19 @@ PROJECT_ID   = os.environ.get("GCP_PROJECT_ID", "gcp-lakehouseproject")
 BRONZE_BUCKET = os.environ.get("BRONZE_BUCKET", f"{PROJECT_ID}-bronze")
 NUM_RECORDS  = int(os.environ.get("NUM_RECORDS", "1000"))
 BAD_DATA_RATE = float(os.environ.get("BAD_DATA_RATE", "0.0"))
+AI_ARTIFACTS_BUCKET = os.environ.get("AI_ARTIFACTS_BUCKET", f"{PROJECT_ID}-ai")
+VERTEX_REGION = os.environ.get("VERTEX_REGION", "us-central1")
+VERTEX_EMBEDDING_MODEL = os.environ.get("VERTEX_EMBEDDING_MODEL", "text-embedding-005")
+BQ_DATASET = os.environ.get("BQ_DATASET", "aviation_analytics")
+BQ_RAG_TABLE = os.environ.get("BQ_RAG_TABLE", "ai_rag_documents")
+
+
+def _as_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "t", "yes", "y", "on"}
+
+
+ENABLE_RAG_DOC_EXPORT = _as_bool(os.environ.get("ENABLE_RAG_DOC_EXPORT", "false"))
+ENABLE_VERTEX_EMBEDDINGS = _as_bool(os.environ.get("ENABLE_VERTEX_EMBEDDINGS", "false"))
 
 AIRLINES = ["AA", "DL", "UA", "WN", "B6", "AS", "NK", "F9", "G4", "HA"]
 AIRPORTS = [
@@ -82,6 +96,100 @@ def inject_bad_data(record: dict) -> dict:
     return bad_record
 
 
+def build_rag_document(record: dict) -> dict:
+    route = f"{record['origin']}-{record['destination']}"
+    dep_delay = int(record["departure_delay_min"])
+    arr_delay = int(record["arrival_delay_min"])
+    weather_flag = record["weather_flag"] == "TRUE"
+
+    content = (
+        f"Flight {record['flight_id']} for airline {record['airline']} on route {route} "
+        f"had departure delay {dep_delay} minutes and arrival delay {arr_delay} minutes. "
+        f"Status was {record['status']}. Weather impact flag was {weather_flag}. "
+        f"Event timestamp was {record['event_ts']}."
+    )
+
+    return {
+        "doc_id": record["flight_id"],
+        "content": content,
+        "source_type": "flight_event",
+        "airline": record["airline"],
+        "route": route,
+        "event_date": datetime.fromisoformat(record["event_ts"]).date().isoformat(),
+        "metadata": {
+            "status": record["status"],
+            "weather_flag": weather_flag,
+            "departure_delay_min": dep_delay,
+            "arrival_delay_min": arr_delay,
+        },
+    }
+
+
+def export_rag_documents(storage_client: storage.Client, records: list[dict], run_date: str) -> None:
+    docs = [build_rag_document(record) for record in records]
+    docs_path = f"aviation/rag_docs/date={run_date}/flight_docs.ndjson"
+
+    docs_buf = io.StringIO()
+    for doc in docs:
+        docs_buf.write(json.dumps(doc))
+        docs_buf.write("\n")
+
+    ai_bucket = storage_client.bucket(AI_ARTIFACTS_BUCKET)
+    ai_bucket.blob(docs_path).upload_from_string(
+        docs_buf.getvalue(),
+        content_type="application/x-ndjson",
+    )
+
+    print(f"[ingest-ai] Exported {len(docs)} RAG docs → gs://{AI_ARTIFACTS_BUCKET}/{docs_path}")
+
+    if not ENABLE_VERTEX_EMBEDDINGS:
+        return
+
+    from google.cloud import bigquery
+    import vertexai
+    from vertexai.language_models import TextEmbeddingModel
+
+    vertexai.init(project=PROJECT_ID, location=VERTEX_REGION)
+    model = TextEmbeddingModel.from_pretrained(VERTEX_EMBEDDING_MODEL)
+
+    embeddings: list[list[float]] = []
+    batch_size = 20
+    for i in range(0, len(docs), batch_size):
+        batch_docs = docs[i : i + batch_size]
+        batch_embeddings = model.get_embeddings([doc["content"] for doc in batch_docs])
+        embeddings.extend([item.values for item in batch_embeddings])
+
+    bq_rows = []
+    row_ids = []
+    updated_ts = datetime.now(timezone.utc).isoformat()
+    for doc, embedding in zip(docs, embeddings):
+        bq_rows.append(
+            {
+                "doc_id": doc["doc_id"],
+                "content": doc["content"],
+                "source_type": doc["source_type"],
+                "airline": doc["airline"],
+                "route": doc["route"],
+                "event_date": doc["event_date"],
+                "embedding": embedding,
+                "metadata": doc["metadata"],
+                "updated_ts": updated_ts,
+            }
+        )
+        row_ids.append(doc["doc_id"])
+
+    bq = bigquery.Client(project=PROJECT_ID)
+    table_id = f"{PROJECT_ID}.{BQ_DATASET}.{BQ_RAG_TABLE}"
+    errors = bq.insert_rows_json(table_id, bq_rows, row_ids=row_ids)
+    if errors:
+        raise RuntimeError(f"BigQuery insert errors: {errors}")
+
+    print(
+        f"[ingest-ai] Embedded and inserted {len(bq_rows)} docs into "
+        f"{PROJECT_ID}.{BQ_DATASET}.{BQ_RAG_TABLE} using {VERTEX_EMBEDDING_MODEL}"
+    )
+
+
 def main() -> None:
     today = datetime.utcnow().strftime("%Y-%m-%d")
     gcs_path = f"aviation/raw/date={today}/flights.csv"
@@ -101,8 +209,8 @@ def main() -> None:
     writer.writeheader()
     writer.writerows(records)
 
-    client = storage.Client(project=PROJECT_ID)
-    bucket = client.bucket(BRONZE_BUCKET)
+    storage_client = storage.Client(project=PROJECT_ID)
+    bucket = storage_client.bucket(BRONZE_BUCKET)
     blob   = bucket.blob(gcs_path)
     blob.upload_from_string(buf.getvalue(), content_type="text/csv")
 
@@ -110,6 +218,11 @@ def main() -> None:
         f"[ingest] Uploaded {NUM_RECORDS} records (bad_rows={bad_rows}, bad_data_rate={BAD_DATA_RATE}) "
         f"→ gs://{BRONZE_BUCKET}/{gcs_path}"
     )
+
+    if ENABLE_RAG_DOC_EXPORT:
+        export_rag_documents(storage_client, records, today)
+    else:
+        print("[ingest-ai] RAG export disabled (set ENABLE_RAG_DOC_EXPORT=true to enable)")
 
 
 if __name__ == "__main__":

@@ -41,3 +41,27 @@ variable "enable_gke" {
   type        = bool
   default     = false
 }
+
+variable "enable_vertex_ai" {
+  description = "Enable Vertex AI APIs, service account, and AI data foundations"
+  type        = bool
+  default     = false
+}
+
+variable "vertex_embedding_model" {
+  description = "Vertex AI text embedding model used by the RAG pipeline"
+  type        = string
+  default     = "text-embedding-005"
+}
+
+variable "vertex_reasoning_model" {
+  description = "Vertex AI reasoning model used for natural-language analytics"
+  type        = string
+  default     = "gemini-2.5-flash"
+}
+
+variable "vector_dimension" {
+  description = "Embedding vector dimensionality for aviation intelligence retrieval"
+  type        = number
+  default     = 768
+}

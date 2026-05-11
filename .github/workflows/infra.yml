@@ -18,6 +18,7 @@ jobs:
       TF_VAR_databricks_token:        ${{ secrets.DATABRICKS_TOKEN }}
       TF_VAR_databricks_account_id:   ${{ secrets.DATABRICKS_ACCOUNT_ID }}
       TF_VAR_enable_gke:              "true"
+      TF_VAR_enable_vertex_ai:        "false"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -44,6 +45,7 @@ jobs:
             iam.googleapis.com \
             container.googleapis.com \
             artifactregistry.googleapis.com \
+            aiplatform.googleapis.com \
             --project=${{ secrets.GCP_PROJECT_ID }}
 
       - name: Terraform Init

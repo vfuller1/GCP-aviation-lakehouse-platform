@@ -112,3 +112,180 @@ resource "google_bigquery_table" "bi_pipeline_refresh_v" {
     SQL
   }
 }
+
+# AI view: delay explanation features at the flight record level.
+resource "google_bigquery_table" "ai_delay_explanations_v" {
+  dataset_id = google_bigquery_dataset.analytics_layer.dataset_id
+  table_id   = "ai_delay_explanations_v"
+
+  view {
+    use_legacy_sql = false
+    query = <<-SQL
+      SELECT
+        flight_id,
+        airline,
+        origin,
+        destination,
+        CONCAT(origin, '-', destination) AS route,
+        SAFE_CAST(event_ts AS TIMESTAMP) AS event_ts,
+        SAFE_CAST(departure_delay_min AS INT64) AS departure_delay_min,
+        SAFE_CAST(arrival_delay_min AS INT64) AS arrival_delay_min,
+        SAFE_CAST(weather_flag AS BOOL) AS weather_flag,
+        status,
+        CASE
+          WHEN SAFE_CAST(weather_flag AS BOOL) THEN 'WEATHER'
+          WHEN SAFE_CAST(departure_delay_min AS INT64) >= 60 THEN 'SEVERE_DEP_DELAY'
+          WHEN SAFE_CAST(arrival_delay_min AS INT64) >= 60 THEN 'SEVERE_ARR_DELAY'
+          WHEN status = 'CANCELLED' THEN 'CANCELLATION'
+          WHEN status = 'DIVERTED' THEN 'DIVERSION'
+          ELSE 'OPERATIONAL'
+        END AS primary_delay_driver
+      FROM `${var.project_id}.${google_bigquery_dataset.analytics_layer.dataset_id}.${google_bigquery_table.silver_flights_ext.table_id}`
+    SQL
+  }
+}
+
+# AI view: route-level risk metrics for retrieval and BI narratives.
+resource "google_bigquery_table" "ai_route_risk_v" {
+  dataset_id = google_bigquery_dataset.analytics_layer.dataset_id
+  table_id   = "ai_route_risk_v"
+
+  view {
+    use_legacy_sql = false
+    query = <<-SQL
+      WITH base AS (
+        SELECT
+          airline,
+          origin,
+          destination,
+          CONCAT(origin, '-', destination) AS route,
+          SAFE_CAST(departure_delay_min AS INT64) AS departure_delay_min,
+          SAFE_CAST(arrival_delay_min AS INT64) AS arrival_delay_min,
+          SAFE_CAST(weather_flag AS BOOL) AS weather_flag,
+          status
+        FROM `${var.project_id}.${google_bigquery_dataset.analytics_layer.dataset_id}.${google_bigquery_table.silver_flights_ext.table_id}`
+      )
+      SELECT
+        route,
+        ANY_VALUE(airline) AS dominant_airline,
+        COUNT(*) AS total_flights,
+        COUNTIF(status IN ('DELAYED', 'CANCELLED', 'DIVERTED')) / COUNT(*) AS disruption_rate,
+        COUNTIF(departure_delay_min >= 60 OR arrival_delay_min >= 60) / COUNT(*) AS severe_delay_rate,
+        COUNTIF(weather_flag) / COUNT(*) AS weather_impact_rate,
+        AVG(departure_delay_min) AS avg_departure_delay_min,
+        AVG(arrival_delay_min) AS avg_arrival_delay_min,
+        ROUND(
+          100 * (
+            0.45 * (COUNTIF(status IN ('DELAYED', 'CANCELLED', 'DIVERTED')) / COUNT(*)) +
+            0.35 * (COUNTIF(departure_delay_min >= 60 OR arrival_delay_min >= 60) / COUNT(*)) +
+            0.20 * (COUNTIF(weather_flag) / COUNT(*))
+          ),
+          2
+        ) AS risk_score
+      FROM base
+      GROUP BY route
+    SQL
+  }
+}
+
+# AI table: canonical RAG document store to be populated by the embedding pipeline.
+resource "google_bigquery_table" "ai_rag_documents" {
+  dataset_id = google_bigquery_dataset.analytics_layer.dataset_id
+  table_id   = "ai_rag_documents"
+
+  schema = jsonencode([
+    {
+      name = "doc_id"
+      type = "STRING"
+      mode = "REQUIRED"
+    },
+    {
+      name = "content"
+      type = "STRING"
+      mode = "REQUIRED"
+    },
+    {
+      name = "source_type"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "airline"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "route"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "event_date"
+      type = "DATE"
+      mode = "NULLABLE"
+    },
+    {
+      name = "embedding"
+      type = "FLOAT64"
+      mode = "REPEATED"
+    },
+    {
+      name = "metadata"
+      type = "JSON"
+      mode = "NULLABLE"
+    },
+    {
+      name = "updated_ts"
+      type = "TIMESTAMP"
+      mode = "REQUIRED"
+    }
+  ])
+}
+
+# AI view: normalized facts for natural-language analytics and RAG chunk generation.
+resource "google_bigquery_table" "ai_nl_analytics_facts_v" {
+  dataset_id = google_bigquery_dataset.analytics_layer.dataset_id
+  table_id   = "ai_nl_analytics_facts_v"
+
+  view {
+    use_legacy_sql = false
+    query = <<-SQL
+      SELECT
+        'route_risk' AS fact_type,
+        route AS fact_key,
+        TO_JSON_STRING(STRUCT(
+          dominant_airline,
+          total_flights,
+          disruption_rate,
+          severe_delay_rate,
+          weather_impact_rate,
+          avg_departure_delay_min,
+          avg_arrival_delay_min,
+          risk_score
+        )) AS fact_payload,
+        CONCAT(
+          'Route ', route, ' risk score is ', CAST(risk_score AS STRING),
+          ' with disruption rate ', CAST(ROUND(disruption_rate * 100, 2) AS STRING), '%',
+          ' and weather impact ', CAST(ROUND(weather_impact_rate * 100, 2) AS STRING), '%.'
+        ) AS narrative_text
+      FROM `${var.project_id}.${google_bigquery_dataset.analytics_layer.dataset_id}.${google_bigquery_table.ai_route_risk_v.table_id}`
+
+      UNION ALL
+
+      SELECT
+        'airline_performance' AS fact_type,
+        airline AS fact_key,
+        TO_JSON_STRING(STRUCT(
+          avg_dep_delay_min,
+          avg_arr_delay_min,
+          total_flights,
+          generated_ts
+        )) AS fact_payload,
+        CONCAT(
+          'Airline ', airline, ' average departure delay is ', CAST(ROUND(avg_dep_delay_min, 2) AS STRING),
+          ' minutes across ', CAST(total_flights AS STRING), ' flights.'
+        ) AS narrative_text
+      FROM `${var.project_id}.${google_bigquery_dataset.analytics_layer.dataset_id}.${google_bigquery_table.bi_airline_performance_v.table_id}`
+    SQL
+  }
+}
