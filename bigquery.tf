@@ -127,7 +127,7 @@ resource "google_bigquery_table" "ai_delay_explanations_v" {
         origin,
         destination,
         CONCAT(origin, '-', destination) AS route,
-        SAFE_CAST(event_ts AS TIMESTAMP) AS event_ts,
+        TIMESTAMP_MICROS(SAFE_CAST(event_ts AS INT64)) AS event_ts,
         SAFE_CAST(departure_delay_min AS INT64) AS departure_delay_min,
         SAFE_CAST(arrival_delay_min AS INT64) AS arrival_delay_min,
         SAFE_CAST(weather_flag AS BOOL) AS weather_flag,
