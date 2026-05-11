@@ -57,3 +57,28 @@ jobs:
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
         run: terraform apply -input=false -auto-approve
+
+      - name: Verify AI BigQuery Objects
+        if: github.ref == 'refs/heads/main'
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          DATASET="aviation_analytics"
+          OBJECTS=(
+            "ai_delay_explanations_v"
+            "ai_route_risk_v"
+            "ai_nl_analytics_facts_v"
+            "ai_rag_documents"
+          )
+
+          for obj in "${OBJECTS[@]}"; do
+            echo "Checking ${PROJECT_ID}:${DATASET}.${obj}"
+            if bq show --format=prettyjson "${PROJECT_ID}:${DATASET}.${obj}" > /dev/null 2>&1; then
+              echo "FOUND ${obj}"
+            else
+              echo "MISSING ${obj}"
+              exit 1
+            fi
+          done
