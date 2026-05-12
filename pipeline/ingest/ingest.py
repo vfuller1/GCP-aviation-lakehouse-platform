@@ -125,6 +125,64 @@ def build_rag_document(record: dict) -> dict:
     }
 
 
+def upsert_rag_documents_to_bigquery(bq_client, target_table_id: str, rows: list[dict]) -> None:
+    from google.cloud import bigquery
+
+    if not rows:
+        return
+
+    temp_table_id = f"{PROJECT_ID}.{BQ_DATASET}._tmp_ai_rag_documents_{uuid.uuid4().hex[:10]}"
+    schema = [
+        bigquery.SchemaField("doc_id", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("content", "STRING", mode="REQUIRED"),
+        bigquery.SchemaField("source_type", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("airline", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("route", "STRING", mode="NULLABLE"),
+        bigquery.SchemaField("event_date", "DATE", mode="NULLABLE"),
+        bigquery.SchemaField("embedding", "FLOAT64", mode="REPEATED"),
+        bigquery.SchemaField("metadata", "JSON", mode="NULLABLE"),
+        bigquery.SchemaField("updated_ts", "TIMESTAMP", mode="REQUIRED"),
+    ]
+
+    load_config = bigquery.LoadJobConfig(schema=schema, write_disposition="WRITE_TRUNCATE")
+    load_job = bq_client.load_table_from_json(rows, temp_table_id, job_config=load_config)
+    load_job.result()
+
+    merge_sql = f"""
+    MERGE `{target_table_id}` AS target
+    USING (
+      SELECT * EXCEPT(rn)
+      FROM (
+        SELECT
+          *,
+          ROW_NUMBER() OVER (PARTITION BY doc_id ORDER BY updated_ts DESC) AS rn
+        FROM `{temp_table_id}`
+      )
+      WHERE rn = 1
+    ) AS source
+    ON target.doc_id = source.doc_id
+    WHEN MATCHED THEN
+      UPDATE SET
+        content = source.content,
+        source_type = source.source_type,
+        airline = source.airline,
+        route = source.route,
+        event_date = source.event_date,
+        embedding = source.embedding,
+        metadata = source.metadata,
+        updated_ts = source.updated_ts
+    WHEN NOT MATCHED THEN
+      INSERT (doc_id, content, source_type, airline, route, event_date, embedding, metadata, updated_ts)
+      VALUES (source.doc_id, source.content, source.source_type, source.airline, source.route, source.event_date, source.embedding, source.metadata, source.updated_ts)
+    """
+
+    try:
+        merge_job = bq_client.query(merge_sql)
+        merge_job.result()
+    finally:
+        bq_client.delete_table(temp_table_id, not_found_ok=True)
+
+
 def export_rag_documents(storage_client: storage.Client, records: list[dict], run_date: str) -> None:
     docs = [build_rag_document(record) for record in records]
     docs_path = f"aviation/rag_docs/date={run_date}/flight_docs.ndjson"
@@ -160,7 +218,6 @@ def export_rag_documents(storage_client: storage.Client, records: list[dict], ru
         embeddings.extend([item.values for item in batch_embeddings])
 
     bq_rows = []
-    row_ids = []
     updated_ts = datetime.now(timezone.utc).isoformat()
     for doc, embedding in zip(docs, embeddings):
         bq_rows.append(
@@ -176,16 +233,13 @@ def export_rag_documents(storage_client: storage.Client, records: list[dict], ru
                 "updated_ts": updated_ts,
             }
         )
-        row_ids.append(doc["doc_id"])
 
     bq = bigquery.Client(project=PROJECT_ID)
     table_id = f"{PROJECT_ID}.{BQ_DATASET}.{BQ_RAG_TABLE}"
-    errors = bq.insert_rows_json(table_id, bq_rows, row_ids=row_ids)
-    if errors:
-        raise RuntimeError(f"BigQuery insert errors: {errors}")
+    upsert_rag_documents_to_bigquery(bq, table_id, bq_rows)
 
     print(
-        f"[ingest-ai] Embedded and inserted {len(bq_rows)} docs into "
+        f"[ingest-ai] Embedded and upserted {len(bq_rows)} docs into "
         f"{PROJECT_ID}.{BQ_DATASET}.{BQ_RAG_TABLE} using {VERTEX_EMBEDDING_MODEL}"
     )
 
