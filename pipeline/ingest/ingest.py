@@ -291,14 +291,15 @@ def export_rag_documents(storage_client: storage.Client, records: list[dict], ru
 
 
 def _trigger_index_update(gcs_uri: str) -> None:
-    """Fire a Vertex AI UpdateIndex call so the BATCH_UPDATE index picks up new vectors."""
-    import vertexai
-    from google.cloud import aiplatform
-
-    vertexai.init(project=PROJECT_ID, location=VERTEX_REGION)
-    aiplatform.init(project=PROJECT_ID, location=VERTEX_REGION)
+    """Fire a Vertex AI UpdateIndex LRO without blocking — returns immediately."""
+    import json
+    import urllib.request
+    import google.auth
+    import google.auth.transport.requests
 
     try:
+        from google.cloud import aiplatform
+        aiplatform.init(project=PROJECT_ID, location=VERTEX_REGION)
         indexes = aiplatform.MatchingEngineIndex.list(
             filter='display_name="aviation-rag-index"',
             project=PROJECT_ID,
@@ -307,9 +308,30 @@ def _trigger_index_update(gcs_uri: str) -> None:
         if not indexes:
             print("[ingest-ai] No Vector Search index found; skipping index update trigger.")
             return
-        index = indexes[0]
-        index.update_embeddings(contents_delta_uri=f"gs://{AI_ARTIFACTS_BUCKET}/aviation/indices/rag/")
-        print(f"[ingest-ai] Triggered Vector Search index update: {index.resource_name}")
+
+        index_name = indexes[0].resource_name  # e.g. projects/.../indexes/...
+        url = (
+            f"https://{VERTEX_REGION}-aiplatform.googleapis.com/v1/"
+            f"{index_name}:updateEmbeddings"
+        )
+        credentials, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        credentials.refresh(google.auth.transport.requests.Request())
+
+        payload = json.dumps({"contentsDeltaUri": gcs_uri, "isCompleteOverwrite": False}).encode()
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {credentials.token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req) as resp:
+            lro = json.loads(resp.read())
+            print(f"[ingest-ai] Triggered Vector Search index update LRO (non-blocking): {lro.get('name', 'unknown')}")
     except Exception as exc:
         print(f"[ingest-ai] Warning: could not trigger index update: {exc}")
 
