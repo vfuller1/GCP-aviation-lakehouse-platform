@@ -109,6 +109,27 @@ jobs:
       - name: Run one-time ingest job now
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_ingest_now) }}
         run: |
+          set -euo pipefail
+
+          print_job_diagnostics() {
+            echo "=== Job describe ==="
+            kubectl describe job "$JOB_NAME" -n aviation-pipeline || true
+            echo "=== Pods for job ${JOB_NAME} ==="
+            PODS=$(kubectl get pods -n aviation-pipeline -l job-name="$JOB_NAME" -o name || true)
+            if [ -z "$PODS" ]; then
+              echo "No pods found for job ${JOB_NAME}"
+              return
+            fi
+            for pod in $PODS; do
+              echo "=== Describe ${pod} ==="
+              kubectl describe "$pod" -n aviation-pipeline || true
+              echo "=== Logs ${pod} (current) ==="
+              kubectl logs "$pod" -n aviation-pipeline --all-containers=true || true
+              echo "=== Logs ${pod} (previous) ==="
+              kubectl logs "$pod" -n aviation-pipeline --all-containers=true --previous || true
+            done
+          }
+
           # Wait for IAM propagation before triggering the ingest job.
           # IAM bindings can take up to 60s to become effective on GKE workload identity.
           echo "Waiting 90s for IAM propagation..."
@@ -116,26 +137,27 @@ jobs:
           JOB_NAME="aviation-ingest-manual-${GITHUB_RUN_ID}"
           kubectl delete job "$JOB_NAME" -n aviation-pipeline --ignore-not-found
           kubectl create job --from=cronjob/aviation-ingest "$JOB_NAME" -n aviation-pipeline
-            echo "Waiting for job ${JOB_NAME} to complete..."
-            for i in $(seq 1 60); do
-              STATUS=$(kubectl get job "$JOB_NAME" -n aviation-pipeline -o jsonpath='{.status.conditions[0].type}' 2>/dev/null || echo "")
-              if [ "$STATUS" = "Complete" ] || [ "$STATUS" = "SuccessCriteriaMet" ]; then
-                echo "Job completed successfully."
-                kubectl logs job/"$JOB_NAME" -n aviation-pipeline || true
-                break
-              elif [ "$STATUS" = "Failed" ]; then
-                echo "Job failed. Pod logs:"
-                kubectl logs job/"$JOB_NAME" -n aviation-pipeline || true
-                exit 1
-              fi
-              echo "  [${i}/60] status=${STATUS:-Pending} — sleeping 10s..."
-              sleep 10
-            done
-            if [ "$STATUS" != "Complete" ] && [ "$STATUS" != "SuccessCriteriaMet" ]; then
-              echo "Job did not complete within 10 minutes. Logs:"
-              kubectl logs job/"$JOB_NAME" -n aviation-pipeline || true
+          echo "Waiting for job ${JOB_NAME} to complete..."
+          STATUS=""
+          for i in $(seq 1 60); do
+            STATUS=$(kubectl get job "$JOB_NAME" -n aviation-pipeline -o jsonpath='{.status.conditions[0].type}' 2>/dev/null || echo "")
+            if [ "$STATUS" = "Complete" ] || [ "$STATUS" = "SuccessCriteriaMet" ]; then
+              echo "Job completed successfully."
+              print_job_diagnostics
+              break
+            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "FailureTarget" ]; then
+              echo "Job entered failure state: ${STATUS}"
+              print_job_diagnostics
               exit 1
             fi
+            echo "  [${i}/60] status=${STATUS:-Pending} — sleeping 10s..."
+            sleep 10
+          done
+          if [ "$STATUS" != "Complete" ] && [ "$STATUS" != "SuccessCriteriaMet" ]; then
+            echo "Job did not complete within 10 minutes."
+            print_job_diagnostics
+            exit 1
+          fi
 
       - name: Run Databricks pipeline jobs (Bronze→Silver→Gold→Export)
         env:

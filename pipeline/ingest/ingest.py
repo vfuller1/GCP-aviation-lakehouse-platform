@@ -97,6 +97,21 @@ def inject_bad_data(record: dict) -> dict:
 
 
 def build_rag_document(record: dict) -> dict:
+    required_fields = [
+        "flight_id",
+        "airline",
+        "origin",
+        "destination",
+        "event_ts",
+        "departure_delay_min",
+        "arrival_delay_min",
+        "status",
+        "weather_flag",
+    ]
+    for field in required_fields:
+        if record.get(field, "") in ("", None):
+            raise ValueError(f"missing required field: {field}")
+
     route = f"{record['origin']}-{record['destination']}"
     dep_delay = int(record["departure_delay_min"])
     arr_delay = int(record["arrival_delay_min"])
@@ -184,7 +199,19 @@ def upsert_rag_documents_to_bigquery(bq_client, target_table_id: str, rows: list
 
 
 def export_rag_documents(storage_client: storage.Client, records: list[dict], run_date: str) -> None:
-    docs = [build_rag_document(record) for record in records]
+    docs = []
+    skipped = 0
+    for record in records:
+        try:
+            docs.append(build_rag_document(record))
+        except (ValueError, TypeError) as exc:
+            skipped += 1
+            print(f"[ingest-ai] Skipping malformed record: {exc}")
+
+    if not docs:
+        print("[ingest-ai] No valid RAG documents to export after validation")
+        return
+
     docs_path = f"aviation/rag_docs/date={run_date}/flight_docs.ndjson"
 
     docs_buf = io.StringIO()
@@ -198,7 +225,10 @@ def export_rag_documents(storage_client: storage.Client, records: list[dict], ru
         content_type="application/x-ndjson",
     )
 
-    print(f"[ingest-ai] Exported {len(docs)} RAG docs → gs://{AI_ARTIFACTS_BUCKET}/{docs_path}")
+    print(
+        f"[ingest-ai] Exported {len(docs)} RAG docs"
+        f" (skipped={skipped}) → gs://{AI_ARTIFACTS_BUCKET}/{docs_path}"
+    )
 
     if not ENABLE_VERTEX_EMBEDDINGS:
         return
