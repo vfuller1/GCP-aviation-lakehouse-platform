@@ -88,6 +88,19 @@ jobs:
         run: |
           docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/retrieval:${{ github.sha }}
           docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/retrieval:latest
+
+      - name: Deploy retrieval service to Cloud Run
+        run: |
+          gcloud run deploy aviation-retrieval \
+            --image ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/retrieval:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --no-traffic 2>&1 || true
+          gcloud run services update-traffic aviation-retrieval \
+            --to-latest \
+            --region ${{ env.REGION }} \
+            --project ${{ secrets.GCP_PROJECT_ID }} 2>&1 || true
+
       - name: Get GKE credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
