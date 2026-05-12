@@ -176,78 +176,111 @@ def query_bigquery_fallback(
     route: Optional[str] = None,
     days_back: int = 7
 ) -> List[Dict[str, Any]]:
-    """Fallback: deterministic BigQuery queries for common questions."""
+    """Deterministic BigQuery facts queries.
+    Primary source: ai_rag_documents (native BQ table, always populated).
+    Secondary: silver_flights_ext / ai_route_risk_v views (may be empty if Parquet export not ready).
+    """
     client = get_bq_client()
-    
+
     if days_back < 1:
         days_back = 7
-    
-    date_filter = f"DATE_SUB(CURRENT_DATE(), INTERVAL {days_back} DAY)"
+
     airline_filter = f"AND airline = '{airline}'" if airline else ""
-    route_filter = f"AND route = '{route}'" if route else ""
-    
-    # Route Risk Analysis
+    route_filter   = f"AND route = '{route}'"     if route   else ""
+
+    # --- Primary: query ai_rag_documents (native BQ table, confirmed populated) ---
+    rag_sql = f"""
+    SELECT
+        airline,
+        route,
+        COUNT(*)                                                                                AS flight_count,
+        ROUND(AVG(CAST(JSON_VALUE(metadata, '$.departure_delay_min') AS FLOAT64)), 1)          AS avg_delay_min,
+        ROUND(
+            COUNTIF(CAST(JSON_VALUE(metadata, '$.weather_flag') AS BOOL)) / COUNT(*) * 100, 1
+        )                                                                                       AS weather_impact_pct,
+        ROUND(
+            COUNTIF(JSON_VALUE(metadata, '$.status') = 'DELAYED') / COUNT(*) * 100, 1
+        )                                                                                       AS delayed_pct
+    FROM `{PROJECT_ID}.{BQ_DATASET}.ai_rag_documents`
+    WHERE event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {days_back} DAY)
+      {airline_filter}
+      {route_filter}
+    GROUP BY airline, route
+    ORDER BY avg_delay_min DESC
+    LIMIT 10
+    """
+
+    try:
+        rows = [dict(r) for r in client.query(rag_sql).result()]
+        if rows:
+            logger.info(f"ai_rag_documents returned {len(rows)} fact rows")
+            return rows
+        logger.info("ai_rag_documents returned 0 rows; trying secondary sources")
+    except Exception as e:
+        logger.error(f"ai_rag_documents query failed: {e}")
+
+    # --- Secondary: silver_flights_ext / ai_route_risk_v views ---
+    date_filter = f"DATE_SUB(CURRENT_DATE(), INTERVAL {days_back} DAY)"
+
     if query_type.lower() in ["route_risk", "risk", "disruption"]:
         sql = f"""
-        SELECT 
+        SELECT
             route,
-            total_flights as flight_count,
-            ROUND(risk_score, 2) as avg_risk_score,
-            ROUND(disruption_rate * 100, 1) as disruption_pct,
-            ROUND(severe_delay_rate * 100, 1) as severe_delay_pct,
-            ROUND(weather_impact_rate * 100, 1) as weather_impact_pct
+            total_flights                             AS flight_count,
+            ROUND(risk_score, 2)                      AS avg_risk_score,
+            ROUND(disruption_rate * 100, 1)           AS disruption_pct,
+            ROUND(severe_delay_rate * 100, 1)         AS severe_delay_pct,
+            ROUND(weather_impact_rate * 100, 1)       AS weather_impact_pct
         FROM `{PROJECT_ID}.{BQ_DATASET}.ai_route_risk_v`
         WHERE 1=1 {route_filter}
         ORDER BY avg_risk_score DESC
         LIMIT 10
         """
-    
-    # Airline Performance
     elif query_type.lower() in ["airline", "performance", "delays"]:
         sql = f"""
-        SELECT 
+        SELECT
             airline,
-            COUNT(*) as flight_count,
-            ROUND(AVG(CAST(departure_delay_min AS FLOAT64)), 1) as avg_delay_minutes,
-            ROUND(SUM(CASE WHEN departure_delay_min > 15 THEN 1 ELSE 0 END) / COUNT(*) * 100, 1) as delayed_pct,
-            ROUND(SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END) / COUNT(*) * 100, 1) as weather_impact_pct
+            COUNT(*)                                                                      AS flight_count,
+            ROUND(AVG(CAST(departure_delay_min AS FLOAT64)), 1)                          AS avg_delay_minutes,
+            ROUND(SUM(CASE WHEN departure_delay_min > 15 THEN 1 ELSE 0 END)
+                  / COUNT(*) * 100, 1)                                                   AS delayed_pct,
+            ROUND(SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END) / COUNT(*) * 100, 1)    AS weather_impact_pct
         FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
         WHERE DATE(event_ts) >= {date_filter} {airline_filter}
         GROUP BY airline
         ORDER BY avg_delay_minutes DESC
         LIMIT 10
         """
-    
-    # Weather Impact
     elif query_type.lower() in ["weather", "impact"]:
         sql = f"""
-        SELECT 
-            COUNT(*) as total_flights,
-            SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END) as weather_affected,
-            ROUND(SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END) / COUNT(*) * 100, 1) as weather_pct,
-            ROUND(AVG(CASE WHEN weather_flag THEN CAST(departure_delay_min AS FLOAT64) ELSE NULL END), 1) as avg_delay_if_weather
+        SELECT
+            COUNT(*)                                                                                 AS total_flights,
+            SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END)                                           AS weather_affected,
+            ROUND(SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END) / COUNT(*) * 100, 1)               AS weather_pct,
+            ROUND(AVG(CASE WHEN weather_flag THEN CAST(departure_delay_min AS FLOAT64) END), 1)     AS avg_delay_if_weather
         FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
         WHERE DATE(event_ts) >= {date_filter}
         """
-    
     else:
-        # Generic NL facts
         sql = f"""
-        SELECT 
-            COUNT(*) as total_flights,
-            COUNT(DISTINCT airline) as airline_count,
-            COUNT(DISTINCT CONCAT(origin, '-', destination)) as route_count,
-            ROUND(AVG(CAST(departure_delay_min AS FLOAT64)), 1) as avg_delay_minutes
+        SELECT
+            COUNT(*)                                                          AS total_flights,
+            COUNT(DISTINCT airline)                                           AS airline_count,
+            COUNT(DISTINCT CONCAT(origin, '-', destination))                  AS route_count,
+            ROUND(AVG(CAST(departure_delay_min AS FLOAT64)), 1)              AS avg_delay_minutes
         FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
         WHERE DATE(event_ts) >= {date_filter}
         """
-    
+
     try:
-        query_job = client.query(sql)
-        rows = list(query_job)
-        return [dict(row) for row in rows]
+        rows = [dict(r) for r in client.query(sql).result()]
+        logger.info(f"Secondary BQ query returned {len(rows)} rows")
+        return rows
     except Exception as e:
-        logger.error(f"BigQuery fallback failed: {e}")
+        logger.error(f"Secondary BigQuery query failed: {e}")
+        return []
+
+
         return []
 
 
