@@ -56,6 +56,31 @@ jobs:
       - name: Terraform Plan
         run: terraform plan -input=false
 
+      - name: Wait for retrieval image tag
+        if: github.ref == 'refs/heads/main'
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: us-central1
+          REPOSITORY: aviation-pipeline
+          IMAGE: retrieval
+        run: |
+          set -euo pipefail
+
+          IMAGE_PATH="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE}"
+          echo "Waiting for image tag ${IMAGE_PATH}:latest to exist..."
+
+          for i in $(seq 1 30); do
+            if gcloud artifacts docker tags list "$IMAGE_PATH" --format='value(tag)' 2>/dev/null | grep -qx "latest"; then
+              echo "Found ${IMAGE_PATH}:latest"
+              exit 0
+            fi
+            echo "  [${i}/30] ${IMAGE_PATH}:latest not found yet; sleeping 10s..."
+            sleep 10
+          done
+
+          echo "Timed out waiting for ${IMAGE_PATH}:latest"
+          exit 1
+
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
         run: terraform apply -input=false -auto-approve

@@ -74,9 +74,10 @@ jobs:
 
       # -----------------------------------------------------------------
       # Docker — build & push retrieval service image to Artifact Registry
+      # Always build this image so Terraform Cloud Run deploys never race
+      # against missing retrieval:latest tags.
       # -----------------------------------------------------------------
       - name: Build retrieval service image
-        if: contains(github.event.head_commit.modified, 'retrieval_service/') || github.event_name == 'workflow_dispatch'
         run: |
           docker build \
             -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/retrieval:${{ github.sha }} \
@@ -84,7 +85,6 @@ jobs:
             retrieval_service/
 
       - name: Push retrieval service image
-        if: contains(github.event.head_commit.modified, 'retrieval_service/') || github.event_name == 'workflow_dispatch'
         run: |
           docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/retrieval:${{ github.sha }}
           docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/retrieval:latest
