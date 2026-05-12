@@ -70,5 +70,6 @@ variable "enable_vector_search" {
   description = "Enable Vertex AI Vector Search index for semantic retrieval"
   type        = bool
   # Enabled by default so infra deploys include Vector Search resources.
+  # Keep true in main to ensure retrieval service receives vector index env vars.
   default     = true
 }
