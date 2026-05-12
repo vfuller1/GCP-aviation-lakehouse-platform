@@ -172,7 +172,7 @@ jobs:
                COUNT(*) AS total_docs,
                COUNTIF(ARRAY_LENGTH(embedding) > 0) AS docs_with_embeddings,
                COUNTIF(updated_ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 24 HOUR)) AS fresh_docs
-             FROM \\`${{ secrets.GCP_PROJECT_ID }}.aviation_analytics.ai_rag_documents\\`")
+             FROM \`${{ secrets.GCP_PROJECT_ID }}.aviation_analytics.ai_rag_documents\`")
 
           TOTAL_DOCS=$(echo "$QUERY_RESULT" | jq -r '.[0].total_docs')
           DOCS_WITH_EMBEDDINGS=$(echo "$QUERY_RESULT" | jq -r '.[0].docs_with_embeddings')
