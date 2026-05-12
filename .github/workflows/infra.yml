@@ -9,6 +9,10 @@ on:
       - ".github/workflows/infra.yml"
   workflow_dispatch:
 
+concurrency:
+  group: infra-terraform-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   terraform:
     runs-on: ubuntu-latest
@@ -54,7 +58,7 @@ jobs:
         run: terraform init
 
       - name: Terraform Plan
-        run: terraform plan -input=false
+        run: terraform plan -lock-timeout=15m -input=false
 
       - name: Wait for retrieval image tag
         if: github.ref == 'refs/heads/main'
@@ -83,7 +87,7 @@ jobs:
 
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
-        run: terraform apply -input=false -auto-approve
+        run: terraform apply -lock-timeout=15m -input=false -auto-approve
 
       - name: Verify AI BigQuery Objects
         if: github.ref == 'refs/heads/main'
