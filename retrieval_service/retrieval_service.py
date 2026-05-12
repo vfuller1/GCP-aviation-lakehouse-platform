@@ -25,7 +25,17 @@ import functools
 from flask import Flask, request, jsonify
 from google.cloud import aiplatform
 from google.cloud import bigquery
-from google.api_core.gapic_v1 import client_info as grpc_client_info
+import vertexai
+
+try:
+    from vertexai.language_models import TextEmbeddingModel
+except ImportError:
+    from vertexai.preview.language_models import TextEmbeddingModel
+
+try:
+    from vertexai.generative_models import GenerativeModel
+except ImportError:
+    from vertexai.preview.generative_models import GenerativeModel
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +51,7 @@ VECTOR_INDEX_ID = os.getenv("VECTOR_SEARCH_INDEX_ID", "")
 BQ_DATASET = os.getenv("BQ_DATASET", "aviation_analytics")
 VERTEX_REGION = os.getenv("VERTEX_REGION", "us-central1")
 REASONING_MODEL = os.getenv("REASONING_MODEL", "gemini-2.5-flash")
+EMBEDDING_MODEL = os.getenv("VERTEX_EMBEDDING_MODEL", "text-embedding-005")
 PORT = int(os.getenv("PORT", 8080))
 
 # Initialize clients (lazy)
@@ -63,8 +74,8 @@ def get_embedding_client():
     """Lazy initialize Vertex Embeddings client."""
     global _embedding_client
     if _embedding_client is None:
-        aiplatform.init(project=PROJECT_ID, location=VERTEX_REGION)
-        _embedding_client = aiplatform.TextEmbeddingModel.from_pretrained("text-embedding-005")
+        vertexai.init(project=PROJECT_ID, location=VERTEX_REGION)
+        _embedding_client = TextEmbeddingModel.from_pretrained(EMBEDDING_MODEL)
     return _embedding_client
 
 
@@ -73,8 +84,8 @@ def get_reasoning_client():
     """Lazy initialize Vertex Reasoning (GenerativeModel) client."""
     global _reasoning_client
     if _reasoning_client is None:
-        aiplatform.init(project=PROJECT_ID, location=VERTEX_REGION)
-        _reasoning_client = aiplatform.GenerativeModel(REASONING_MODEL)
+        vertexai.init(project=PROJECT_ID, location=VERTEX_REGION)
+        _reasoning_client = GenerativeModel(REASONING_MODEL)
     return _reasoning_client
 
 
