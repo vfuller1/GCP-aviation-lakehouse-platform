@@ -60,6 +60,26 @@ _embedding_client = None
 _reasoning_client = None
 
 
+def _resource_id(value: str) -> str:
+    """Normalize full resource names to bare IDs when needed."""
+    if not value:
+        return ""
+    return value.split("/")[-1]
+
+
+def _metadata_to_dict(metadata: Any) -> Dict[str, Any]:
+    """Convert Vertex metadata payloads to plain dict safely."""
+    if metadata is None:
+        return {}
+    if isinstance(metadata, dict):
+        return metadata
+    try:
+        # google.protobuf.struct_pb2.Struct supports .items()
+        return dict(metadata.items())
+    except Exception:
+        return {}
+
+
 @functools.lru_cache(maxsize=1)
 def get_bq_client():
     """Lazy initialize BigQuery client."""
@@ -115,7 +135,7 @@ def search_vector_index(query_vector: List[float], top_k: int = 5) -> List[Dict[
         )
         
         request_body = {
-            "index_endpoint": f"projects/{PROJECT_ID}/locations/{VECTOR_REGION}/indexEndpoints/{VECTOR_ENDPOINT_ID}",
+            "index_endpoint": f"projects/{PROJECT_ID}/locations/{VECTOR_REGION}/indexEndpoints/{_resource_id(VECTOR_ENDPOINT_ID)}",
             "deployed_index_id": "aviation-rag-deployed",
             "queries": [
                 {
@@ -131,14 +151,15 @@ def search_vector_index(query_vector: List[float], top_k: int = 5) -> List[Dict[
         results = []
         
         for match in response.responses[0].matches[:top_k]:
+            metadata = _metadata_to_dict(getattr(match.datapoint, "custom_metadata", None))
             results.append({
                 "doc_id": match.id,
                 "distance": float(match.distance),
-                "content": match.datapoint.custom_metadata.get("content", ""),
-                "source_type": match.datapoint.custom_metadata.get("source_type", ""),
-                "airline": match.datapoint.custom_metadata.get("airline", ""),
-                "route": match.datapoint.custom_metadata.get("route", ""),
-                "event_date": match.datapoint.custom_metadata.get("event_date", ""),
+                "content": metadata.get("content", ""),
+                "source_type": metadata.get("source_type", ""),
+                "airline": metadata.get("airline", ""),
+                "route": metadata.get("route", ""),
+                "event_date": metadata.get("event_date", ""),
             })
         
         logger.info(f"Vector Search returned {len(results)} results")
@@ -170,13 +191,13 @@ def query_bigquery_fallback(
         sql = f"""
         SELECT 
             route,
-            COUNT(*) as flight_count,
-            ROUND(AVG(risk_score), 2) as avg_risk_score,
-            ROUND(SUM(CASE WHEN disruption_flag THEN 1 ELSE 0 END) / COUNT(*) * 100, 1) as disruption_pct,
-            ROUND(SUM(CASE WHEN severe_delay_flag THEN 1 ELSE 0 END) / COUNT(*) * 100, 1) as severe_delay_pct
+            total_flights as flight_count,
+            ROUND(risk_score, 2) as avg_risk_score,
+            ROUND(disruption_rate * 100, 1) as disruption_pct,
+            ROUND(severe_delay_rate * 100, 1) as severe_delay_pct,
+            ROUND(weather_impact_rate * 100, 1) as weather_impact_pct
         FROM `{PROJECT_ID}.{BQ_DATASET}.ai_route_risk_v`
-        WHERE event_date >= {date_filter} {route_filter}
-        GROUP BY route
+        WHERE 1=1 {route_filter}
         ORDER BY avg_risk_score DESC
         LIMIT 10
         """
@@ -187,11 +208,11 @@ def query_bigquery_fallback(
         SELECT 
             airline,
             COUNT(*) as flight_count,
-            ROUND(AVG(CAST(delay_minutes AS FLOAT64)), 1) as avg_delay_minutes,
-            ROUND(SUM(CASE WHEN delay_minutes > 15 THEN 1 ELSE 0 END) / COUNT(*) * 100, 1) as delayed_pct,
+            ROUND(AVG(CAST(departure_delay_min AS FLOAT64)), 1) as avg_delay_minutes,
+            ROUND(SUM(CASE WHEN departure_delay_min > 15 THEN 1 ELSE 0 END) / COUNT(*) * 100, 1) as delayed_pct,
             ROUND(SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END) / COUNT(*) * 100, 1) as weather_impact_pct
         FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
-        WHERE event_date >= {date_filter} {airline_filter}
+        WHERE DATE(event_ts) >= {date_filter} {airline_filter}
         GROUP BY airline
         ORDER BY avg_delay_minutes DESC
         LIMIT 10
@@ -204,9 +225,9 @@ def query_bigquery_fallback(
             COUNT(*) as total_flights,
             SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END) as weather_affected,
             ROUND(SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END) / COUNT(*) * 100, 1) as weather_pct,
-            ROUND(AVG(CASE WHEN weather_flag THEN CAST(delay_minutes AS FLOAT64) ELSE NULL END), 1) as avg_delay_if_weather
+            ROUND(AVG(CASE WHEN weather_flag THEN CAST(departure_delay_min AS FLOAT64) ELSE NULL END), 1) as avg_delay_if_weather
         FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
-        WHERE event_date >= {date_filter}
+        WHERE DATE(event_ts) >= {date_filter}
         """
     
     else:
@@ -215,10 +236,10 @@ def query_bigquery_fallback(
         SELECT 
             COUNT(*) as total_flights,
             COUNT(DISTINCT airline) as airline_count,
-            COUNT(DISTINCT route) as route_count,
-            ROUND(AVG(CAST(delay_minutes AS FLOAT64)), 1) as avg_delay_minutes
+            COUNT(DISTINCT CONCAT(origin, '-', destination)) as route_count,
+            ROUND(AVG(CAST(departure_delay_min AS FLOAT64)), 1) as avg_delay_minutes
         FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
-        WHERE event_date >= {date_filter}
+        WHERE DATE(event_ts) >= {date_filter}
         """
     
     try:
@@ -313,7 +334,7 @@ def retrieve():
     }
     """
     try:
-        payload = request.get_json()
+        payload = request.get_json(silent=True) or {}
         question = payload.get("question", "").strip()
         airline = payload.get("airline", "").upper() or None
         route = payload.get("route", "").upper() or None
