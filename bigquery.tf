@@ -12,9 +12,63 @@ resource "google_bigquery_table" "silver_flights_ext" {
   table_id   = "silver_flights_ext"
   deletion_protection = false
 
+  # Phase 2: explicit schema to map Parquet INT96 event_ts to TIMESTAMP.
+  schema = jsonencode([
+    {
+      name = "flight_id"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "airline"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "origin"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "destination"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "departure_delay_min"
+      type = "INTEGER"
+      mode = "NULLABLE"
+    },
+    {
+      name = "arrival_delay_min"
+      type = "INTEGER"
+      mode = "NULLABLE"
+    },
+    {
+      name = "weather_flag"
+      type = "BOOLEAN"
+      mode = "NULLABLE"
+    },
+    {
+      name = "status"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "event_ts"
+      type = "TIMESTAMP"
+      mode = "NULLABLE"
+    },
+    {
+      name = "ingest_date"
+      type = "DATE"
+      mode = "NULLABLE"
+    }
+  ])
+
   external_data_configuration {
     source_format = "PARQUET"
-    autodetect    = true
+    autodetect    = false
     source_uris = [
       "gs://${var.project_id}-silver/aviation/cleaned/*.parquet",
     ]
