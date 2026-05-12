@@ -240,12 +240,23 @@ def export_rag_documents(storage_client: storage.Client, records: list[dict], ru
     vertexai.init(project=PROJECT_ID, location=VERTEX_REGION)
     model = TextEmbeddingModel.from_pretrained(VERTEX_EMBEDDING_MODEL)
 
+    import time
+
     embeddings: list[list[float]] = []
-    batch_size = 20
+    batch_size = 5
     for i in range(0, len(docs), batch_size):
         batch_docs = docs[i : i + batch_size]
-        batch_embeddings = model.get_embeddings([doc["content"] for doc in batch_docs])
-        embeddings.extend([item.values for item in batch_embeddings])
+        for attempt in range(6):
+            try:
+                batch_embeddings = model.get_embeddings([doc["content"] for doc in batch_docs])
+                embeddings.extend([item.values for item in batch_embeddings])
+                break
+            except Exception as exc:
+                if attempt == 5:
+                    raise
+                wait = 2 ** attempt * 5
+                print(f"[ingest-ai] Embedding batch {i//batch_size} attempt {attempt+1} failed ({exc}); retrying in {wait}s...")
+                time.sleep(wait)
 
     bq_rows = []
     updated_ts = datetime.now(timezone.utc).isoformat()
