@@ -128,3 +128,29 @@ jobs:
           else
             echo "Cloud Run service ${SERVICE_NAME} not found (enable_vertex_ai may be false)"
           fi
+
+      - name: Run E2E Retrieval Service Smoke Tests
+        if: github.ref == 'refs/heads/main'
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          SERVICE_NAME="aviation-retrieval"
+          REGION="us-central1"
+
+          # Get service URL
+          SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)' 2>/dev/null || echo "")
+
+          if [ -z "$SERVICE_URL" ]; then
+            echo "⚠ Cloud Run service URL not available; skipping smoke tests"
+            exit 0
+          fi
+
+          echo "Running smoke tests against: $SERVICE_URL"
+          
+          # Install dependencies
+          pip install --quiet requests
+
+          # Run smoke tests
+          python3 tests/test_retrieval_e2e.py "$SERVICE_URL" --timeout 45
