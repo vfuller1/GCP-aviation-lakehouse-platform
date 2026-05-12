@@ -89,6 +89,29 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: terraform apply -lock-timeout=15m -input=false -auto-approve
 
+      - name: Force Cloud Run revision with latest image
+        if: github.ref == 'refs/heads/main'
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: us-central1
+        run: |
+          set -euo pipefail
+          IMAGE="us-central1-docker.pkg.dev/${PROJECT_ID}/aviation-pipeline/retrieval:latest"
+          echo "Forcing new Cloud Run revision with image: $IMAGE"
+          gcloud run deploy aviation-retrieval \
+            --image "$IMAGE" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --no-traffic \
+            2>&1 || true
+          # Migrate traffic to the new revision
+          gcloud run services update-traffic aviation-retrieval \
+            --to-latest \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            2>&1 || true
+          echo "Cloud Run revision updated."
+
       - name: Verify AI BigQuery Objects
         if: github.ref == 'refs/heads/main'
         env:
