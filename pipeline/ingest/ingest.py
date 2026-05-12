@@ -273,6 +273,19 @@ def export_rag_documents(storage_client: storage.Client, records: list[dict], ru
         f"{PROJECT_ID}.{BQ_DATASET}.{BQ_RAG_TABLE} using {VERTEX_EMBEDDING_MODEL}"
     )
 
+    # Write Vertex AI batch-update index file (flat — no subdirs allowed)
+    # Format: one JSON object per line with 'id' and 'embedding' fields
+    index_path = "aviation/indices/rag/batch.json"
+    index_buf = io.StringIO()
+    for row in bq_rows:
+        index_buf.write(json.dumps({"id": row["doc_id"], "embedding": row["embedding"]}))
+        index_buf.write("\n")
+    ai_bucket.blob(index_path).upload_from_string(
+        index_buf.getvalue(),
+        content_type="application/x-ndjson",
+    )
+    print(f"[ingest-ai] Wrote {len(bq_rows)} vectors → gs://{AI_ARTIFACTS_BUCKET}/{index_path}")
+
 
 def main() -> None:
     today = datetime.utcnow().strftime("%Y-%m-%d")
