@@ -109,6 +109,10 @@ jobs:
       - name: Run one-time ingest job now
         if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_ingest_now) }}
         run: |
+          # Wait for IAM propagation before triggering the ingest job.
+          # IAM bindings can take up to 60s to become effective on GKE workload identity.
+          echo "Waiting 90s for IAM propagation..."
+          sleep 90
           JOB_NAME="aviation-ingest-manual-${GITHUB_RUN_ID}"
           kubectl delete job "$JOB_NAME" -n aviation-pipeline --ignore-not-found
           kubectl create job --from=cronjob/aviation-ingest "$JOB_NAME" -n aviation-pipeline

@@ -10,15 +10,9 @@ resource "google_service_account" "aviation_retrieval_sa" {
   description     = "Service account for Cloud Run retrieval service (Vector Search + Vertex Reasoning)"
 }
 
-# Allow Cloud Run to use Vertex Vector Search
-resource "google_project_iam_member" "retrieval_vector_user" {
-  count   = var.enable_vertex_ai ? 1 : 0
-  project = var.project_id
-  role    = "roles/aiplatform.indexEndpointUser"
-  member  = "serviceAccount:${google_service_account.aviation_retrieval_sa[0].email}"
-}
-
-# Allow Cloud Run to call Vertex Reasoning (GenerativeModel)
+# Allow Cloud Run to call Vertex Reasoning and Vector Search
+# roles/aiplatform.user covers both GenerativeModel and Vector Search endpoint queries;
+# roles/aiplatform.indexEndpointUser is a resource-level role only (not valid at project level)
 resource "google_project_iam_member" "retrieval_vertex_user" {
   count   = var.enable_vertex_ai ? 1 : 0
   project = var.project_id
@@ -115,7 +109,6 @@ resource "google_cloud_run_service" "aviation_retrieval" {
 
   depends_on = [
     google_service_account.aviation_retrieval_sa,
-    google_project_iam_member.retrieval_vector_user,
     google_project_iam_member.retrieval_vertex_user,
     google_project_iam_member.retrieval_bq_user,
     google_storage_bucket_iam_member.retrieval_ai_reader,
