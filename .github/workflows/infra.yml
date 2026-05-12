@@ -46,6 +46,7 @@ jobs:
             container.googleapis.com \
             artifactregistry.googleapis.com \
             aiplatform.googleapis.com \
+            run.googleapis.com \
             --project=${{ secrets.GCP_PROJECT_ID }}
 
       - name: Terraform Init
@@ -82,3 +83,22 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Verify Cloud Run Retrieval Service
+        if: github.ref == 'refs/heads/main'
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+
+          SERVICE_NAME="aviation-retrieval"
+          REGION="us-central1"
+
+          echo "Checking Cloud Run service: ${SERVICE_NAME}"
+          if gcloud run services describe "$SERVICE_NAME" --region="$REGION" --project="$PROJECT_ID" > /dev/null 2>&1; then
+            echo "FOUND Cloud Run service ${SERVICE_NAME}"
+            SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')
+            echo "Service URL: $SERVICE_URL"
+          else
+            echo "Cloud Run service ${SERVICE_NAME} not found (enable_vertex_ai may be false)"
+          fi

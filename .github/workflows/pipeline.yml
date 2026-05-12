@@ -16,6 +16,7 @@ on:
     paths:
       - "pipeline/**"
       - "k8s/**"
+      - "retrieval_service/**"
       - ".github/workflows/pipeline.yml"
   workflow_dispatch:
     inputs:
@@ -71,8 +72,21 @@ jobs:
           docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:latest
 
       # -----------------------------------------------------------------
-      # GKE — apply Kubernetes manifests
+      # Docker — build & push retrieval service image to Artifact Registry
       # -----------------------------------------------------------------
+      - name: Build retrieval service image
+        if: contains(github.event.head_commit.modified, 'retrieval_service/') || github.event_name == 'workflow_dispatch'
+        run: |
+          docker build \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/retrieval:${{ github.sha }} \
+            -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/retrieval:latest \
+            retrieval_service/
+
+      - name: Push retrieval service image
+        if: contains(github.event.head_commit.modified, 'retrieval_service/') || github.event_name == 'workflow_dispatch'
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/retrieval:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO }}/retrieval:latest
       - name: Get GKE credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
