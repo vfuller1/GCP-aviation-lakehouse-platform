@@ -95,34 +95,8 @@ resource "google_cloud_run_service" "aviation_retrieval" {
             memory = "2Gi"
           }
         }
-        
-        # Startup probe for readiness
-        startup_probe {
-          http_get {
-            path = "/health/ready"
-            port = 8080
-          }
-          initial_delay_seconds = 10
-          timeout_seconds       = 5
-          period_seconds        = 10
-          failure_threshold     = 3
-        }
-        
-        # Liveness probe
-        liveness_probe {
-          http_get {
-            path = "/health"
-            port = 8080
-          }
-          initial_delay_seconds = 30
-          timeout_seconds       = 5
-          period_seconds        = 10
-          failure_threshold     = 3
-        }
       }
-      
-      # Concurrency and scaling
-      max_instances = 100
+
       timeout_seconds = 3600
     }
     

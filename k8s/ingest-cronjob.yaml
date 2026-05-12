@@ -38,7 +38,7 @@ spec:
                 - name: BAD_DATA_RATE
                   value: "0.02"
                 - name: ENABLE_RAG_DOC_EXPORT
-                  value: "true"
+                  value: "false"
                 - name: ENABLE_VERTEX_EMBEDDINGS
                   value: "false"
                 - name: AI_ARTIFACTS_BUCKET

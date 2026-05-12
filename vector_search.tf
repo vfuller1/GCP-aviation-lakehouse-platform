@@ -43,44 +43,12 @@ resource "google_vertex_ai_index_endpoint" "aviation_rag" {
   ]
 }
 
-# Deploy the index to the endpoint
-resource "google_vertex_ai_index_endpoint_deploy_indexed_model" "aviation_rag" {
-  count             = var.enable_vertex_ai && var.enable_vector_search ? 1 : 0
-  index_endpoint    = google_vertex_ai_index_endpoint.aviation_rag[0].id
-  deployed_index_id = "aviation-rag-deployed"
-  index_id          = google_vertex_ai_index.aviation_rag[0].id
-
-  depends_on = [
-    google_vertex_ai_index.aviation_rag,
-    google_vertex_ai_index_endpoint.aviation_rag
-  ]
-}
-
-# Allow the aviation AI service account to use the index
-resource "google_vertex_ai_index_iam_member" "aviation_ai_retriever" {
-  count   = var.enable_vertex_ai && var.enable_vector_search ? 1 : 0
-  index   = google_vertex_ai_index.aviation_rag[0].id
-  role    = "roles/aiplatform.indexReader"
-  member  = "serviceAccount:${google_service_account.aviation_ai_sa[0].email}"
-
-  depends_on = [
-    google_service_account.aviation_ai_sa,
-    google_vertex_ai_index.aviation_rag
-  ]
-}
-
-# Allow the aviation AI service account to use the endpoint
-resource "google_vertex_ai_index_endpoint_iam_member" "aviation_ai_retriever" {
-  count        = var.enable_vertex_ai && var.enable_vector_search ? 1 : 0
-  index_endpoint = google_vertex_ai_index_endpoint.aviation_rag[0].id
-  role         = "roles/aiplatform.indexEndpointUser"
-  member       = "serviceAccount:${google_service_account.aviation_ai_sa[0].email}"
-
-  depends_on = [
-    google_service_account.aviation_ai_sa,
-    google_vertex_ai_index_endpoint.aviation_rag
-  ]
-}
+# Note: Index deployment to endpoint and index/endpoint-level IAM are not supported
+# as standalone Terraform resources in the hashicorp/google provider.
+# - Index deployment is performed via the Vertex AI API after index build completes
+#   (index build can take 1-2 hours after first data load).
+# - Access control uses the project-level roles/aiplatform.user binding in vertex_ai.tf,
+#   which covers both Vector Search index queries and endpoint calls.
 
 # Outputs
 output "vector_search_index_id" {
@@ -99,6 +67,6 @@ output "vector_search_index_endpoint_domain_name" {
 }
 
 output "deployed_index_id" {
-  description = "The deployed index ID for direct API access"
+  description = "Stable deployed index ID used when calling the endpoint API"
   value       = "aviation-rag-deployed"
 }
