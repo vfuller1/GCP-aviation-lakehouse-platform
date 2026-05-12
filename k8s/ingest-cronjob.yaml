@@ -38,9 +38,9 @@ spec:
                 - name: BAD_DATA_RATE
                   value: "0.02"
                 - name: ENABLE_RAG_DOC_EXPORT
-                  value: "false"
+                  value: "true"
                 - name: ENABLE_VERTEX_EMBEDDINGS
-                  value: "false"
+                  value: "true"
                 - name: AI_ARTIFACTS_BUCKET
                   value: "gcp-lakehouseproject-ai"
                 - name: VERTEX_REGION
