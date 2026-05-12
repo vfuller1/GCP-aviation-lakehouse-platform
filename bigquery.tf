@@ -11,9 +11,63 @@ resource "google_bigquery_table" "silver_flights_ext" {
   dataset_id = google_bigquery_dataset.analytics_layer.dataset_id
   table_id   = "silver_flights_ext"
 
+  # Keep schema explicit so Parquet INT96 timestamps map consistently.
+  schema = jsonencode([
+    {
+      name = "flight_id"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "airline"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "origin"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "destination"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "departure_delay_min"
+      type = "INT64"
+      mode = "NULLABLE"
+    },
+    {
+      name = "arrival_delay_min"
+      type = "INT64"
+      mode = "NULLABLE"
+    },
+    {
+      name = "weather_flag"
+      type = "BOOL"
+      mode = "NULLABLE"
+    },
+    {
+      name = "status"
+      type = "STRING"
+      mode = "NULLABLE"
+    },
+    {
+      name = "event_ts"
+      type = "TIMESTAMP"
+      mode = "NULLABLE"
+    },
+    {
+      name = "ingest_date"
+      type = "DATE"
+      mode = "NULLABLE"
+    }
+  ])
+
   external_data_configuration {
     source_format = "PARQUET"
-    autodetect    = true
+    autodetect    = false
     source_uris = [
       "gs://${var.project_id}-silver/aviation/cleaned/*.parquet",
     ]
@@ -127,7 +181,10 @@ resource "google_bigquery_table" "ai_delay_explanations_v" {
         origin,
         destination,
         CONCAT(origin, '-', destination) AS route,
-        TIMESTAMP_MICROS(SAFE_CAST(event_ts AS INT64)) AS event_ts,
+        COALESCE(
+          TIMESTAMP_MICROS(SAFE_CAST(CAST(event_ts AS STRING) AS INT64)),
+          SAFE_CAST(CAST(event_ts AS STRING) AS TIMESTAMP)
+        ) AS event_ts,
         SAFE_CAST(departure_delay_min AS INT64) AS departure_delay_min,
         SAFE_CAST(arrival_delay_min AS INT64) AS arrival_delay_min,
         SAFE_CAST(weather_flag AS BOOL) AS weather_flag,
