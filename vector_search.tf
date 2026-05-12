@@ -15,22 +15,18 @@ resource "google_vertex_ai_index" "aviation_rag" {
       approximate_neighbors_count = 100
       shard_size                  = "SHARD_SIZE_SMALL"
       distance_measure_type       = "DOT_PRODUCT_DISTANCE"
+      algorithm_config {
+        tree_ah_config {
+          leaf_node_embedding_count    = 100
+          leaf_nodes_to_search_percent = 7
+        }
+      }
     }
     contents_delta_uri = "gs://${var.project_id}-ai/aviation/indices/rag/"
   }
 
-  index_config {
-    algorithm_config {
-      tree_ah_config {
-        leaf_node_embedding_count = 100
-        leaf_nodes_to_search_percent = 7
-      }
-    }
-  }
-
   depends_on = [
-    google_bigquery_table.ai_rag_documents,
-    google_project_service.aiplatform
+    google_bigquery_table.ai_rag_documents
   ]
 }
 

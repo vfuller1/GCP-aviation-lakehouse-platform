@@ -40,7 +40,7 @@ spec:
                 - name: ENABLE_RAG_DOC_EXPORT
                   value: "true"
                 - name: ENABLE_VERTEX_EMBEDDINGS
-                  value: "true"
+                  value: "false"
                 - name: AI_ARTIFACTS_BUCKET
                   value: "gcp-lakehouseproject-ai"
                 - name: VERTEX_REGION

@@ -150,11 +150,11 @@ resource "google_cloud_run_service" "aviation_retrieval" {
 }
 
 # Allow public access to the retrieval service
-resource "google_cloud_run_iam_member" "retrieval_public" {
-  count   = var.enable_vertex_ai ? 1 : 0
-  service = google_cloud_run_service.aviation_retrieval[0].name
-  role    = "roles/run.invoker"
-  member  = "allUsers"
+resource "google_cloud_run_service_iam_member" "retrieval_public" {
+  count    = var.enable_vertex_ai ? 1 : 0
+  service  = google_cloud_run_service.aviation_retrieval[0].name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
   location = var.region
 }
 
