@@ -27,6 +27,7 @@ on:
         type: boolean
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   PROJECT_ID:    ${{ secrets.GCP_PROJECT_ID }}
   REGION:        us-central1
   REGISTRY:      us-central1-docker.pkg.dev
