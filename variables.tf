@@ -69,5 +69,5 @@ variable "vector_dimension" {
 variable "enable_vector_search" {
   description = "Enable Vertex AI Vector Search index for semantic retrieval"
   type        = bool
-  default     = false
+  default     = true
 }
