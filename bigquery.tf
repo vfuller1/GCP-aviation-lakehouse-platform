@@ -15,7 +15,7 @@ resource "google_bigquery_table" "silver_flights_ext" {
     source_format = "PARQUET"
     autodetect    = true
     source_uris = [
-      "gs://${var.project_id}-silver/aviation/cleaned/silver_flights.parquet",
+      "gs://${var.project_id}-silver/aviation/cleaned/*.parquet",
     ]
   }
 }
