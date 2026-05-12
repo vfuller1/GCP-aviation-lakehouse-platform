@@ -10,6 +10,7 @@ resource "google_bigquery_dataset" "analytics_layer" {
 resource "google_bigquery_table" "silver_flights_ext" {
   dataset_id = google_bigquery_dataset.analytics_layer.dataset_id
   table_id   = "silver_flights_ext"
+  deletion_protection = false
 
   # Keep schema explicit so Parquet INT96 timestamps map consistently.
   schema = jsonencode([
