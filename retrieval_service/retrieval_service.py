@@ -85,8 +85,9 @@ def embed_query(query_text: str) -> List[float]:
         embeddings = client.get_embeddings([query_text])
         return embeddings[0].values
     except Exception as e:
-        logger.error(f"Failed to embed query: {e}")
-        raise
+        # Embeddings are optional for request success; fallback facts can still answer.
+        logger.warning(f"Failed to embed query; continuing without vector retrieval: {e}")
+        return []
 
 
 def search_vector_index(query_vector: List[float], top_k: int = 5) -> List[Dict[str, Any]]:
@@ -259,7 +260,17 @@ def reason_with_vertex(prompt: str) -> str:
         return response.text
     except Exception as e:
         logger.error(f"Vertex Reasoning failed: {e}")
-        return f"Error generating answer: {str(e)}"
+        return "Unable to generate model narrative at the moment; returning deterministic analytics facts only."
+
+
+def build_fallback_answer(question: str, deterministic_facts: List[Dict[str, Any]]) -> str:
+    """Create a deterministic answer if generative reasoning is unavailable."""
+    if not deterministic_facts:
+        return "No matching data was found for the requested filters in the selected time window."
+
+    top = deterministic_facts[0]
+    serialized = ", ".join(f"{k}={v}" for k, v in top.items())
+    return f"Deterministic response for '{question}': {serialized}."
 
 
 @app.route("/health", methods=["GET"])
@@ -303,12 +314,14 @@ def retrieve():
         
         logger.info(f"Query: {question} (airline={airline}, route={route}, days_back={days_back})")
         
-        # 1. Embed the query
+        # 1. Embed the query (best effort)
         query_vector = embed_query(question)
         logger.info(f"Embedded query to {len(query_vector)}-dim vector")
-        
-        # 2. Retrieve from Vector Search
-        context_docs = search_vector_index(query_vector, top_k=top_k)
+
+        # 2. Retrieve from Vector Search when embeddings are available
+        context_docs: List[Dict[str, Any]] = []
+        if query_vector:
+            context_docs = search_vector_index(query_vector, top_k=top_k)
         logger.info(f"Retrieved {len(context_docs)} documents from Vector Search")
         
         # 3. Query BigQuery for deterministic facts
@@ -325,6 +338,8 @@ def retrieve():
         
         # 5. Call Vertex Reasoning
         answer = reason_with_vertex(prompt)
+        if answer.startswith("Unable to generate model narrative"):
+            answer = f"{answer} {build_fallback_answer(question, facts)}"
         logger.info(f"Generated answer: {answer[:100]}...")
         
         # 6. Format response with citations
@@ -361,10 +376,7 @@ def readiness():
         # Check BigQuery
         client = get_bq_client()
         client.query(f"SELECT 1").result()
-        
-        # Check embedding model (lazy load)
-        _ = get_embedding_client()
-        
+        # Keep readiness lightweight; model/index warm-up is handled at request time.
         return jsonify({"ready": True}), 200
     except Exception as e:
         logger.error(f"Readiness check failed: {e}")

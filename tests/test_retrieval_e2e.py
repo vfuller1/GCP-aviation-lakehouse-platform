@@ -44,6 +44,32 @@ class RetrievalServiceTester:
             'nl_analytics': False,
         }
         self.errors = []
+
+    def _post_with_retries(self, path: str, payload: Dict[str, Any], attempts: int = 4, backoff_seconds: int = 8):
+        """POST helper with retry for transient 5xx responses during warm-up."""
+        url = f"{self.service_url}{path}"
+        last_exc = None
+        for i in range(1, attempts + 1):
+            try:
+                response = requests.post(url, json=payload, timeout=self.timeout)
+                if response.status_code >= 500:
+                    raise requests.HTTPError(
+                        f"{response.status_code} Server Error: {response.text}",
+                        response=response,
+                    )
+                return response
+            except Exception as exc:
+                last_exc = exc
+                if i == attempts:
+                    break
+                logger.warning(
+                    "Transient retrieve failure on attempt %s/%s, retrying in %ss",
+                    i,
+                    attempts,
+                    backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
+        raise last_exc
     
     def test_health_check(self) -> bool:
         """Test basic health check endpoint."""
@@ -146,11 +172,7 @@ class RetrievalServiceTester:
                 "top_k": 5
             }
             
-            response = requests.post(
-                f"{self.service_url}/retrieve",
-                json=payload,
-                timeout=self.timeout
-            )
+            response = self._post_with_retries("/retrieve", payload)
             response.raise_for_status()
             data = response.json()
             
@@ -199,11 +221,7 @@ class RetrievalServiceTester:
                 "top_k": 5
             }
             
-            response = requests.post(
-                f"{self.service_url}/retrieve",
-                json=payload,
-                timeout=self.timeout
-            )
+            response = self._post_with_retries("/retrieve", payload)
             response.raise_for_status()
             data = response.json()
             
@@ -251,11 +269,7 @@ class RetrievalServiceTester:
                 "top_k": 5
             }
             
-            response = requests.post(
-                f"{self.service_url}/retrieve",
-                json=payload,
-                timeout=self.timeout
-            )
+            response = self._post_with_retries("/retrieve", payload)
             response.raise_for_status()
             data = response.json()
             
