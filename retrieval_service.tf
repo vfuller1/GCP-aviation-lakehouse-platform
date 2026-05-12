@@ -29,6 +29,14 @@ resource "google_project_iam_member" "retrieval_bq_user" {
   member  = "serviceAccount:${google_service_account.aviation_retrieval_sa[0].email}"
 }
 
+# Allow Cloud Run to run BigQuery jobs (required to execute queries)
+resource "google_project_iam_member" "retrieval_bq_job_user" {
+  count   = var.enable_vertex_ai ? 1 : 0
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = "serviceAccount:${google_service_account.aviation_retrieval_sa[0].email}"
+}
+
 # Allow Cloud Run to read AI artifacts bucket
 resource "google_storage_bucket_iam_member" "retrieval_ai_reader" {
   count  = var.enable_vertex_ai ? 1 : 0

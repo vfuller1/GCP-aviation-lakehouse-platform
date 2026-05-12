@@ -22,7 +22,7 @@ resource "google_vertex_ai_index" "aviation_rag" {
         }
       }
     }
-    contents_delta_uri = "gs://${var.project_id}-ai/aviation/indices/rag/"
+    contents_delta_uri = "gs://${var.project_id}-ai/aviation/rag_docs/"
   }
 
   depends_on = [
