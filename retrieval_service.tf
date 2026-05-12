@@ -77,10 +77,6 @@ resource "google_cloud_run_service" "aviation_retrieval" {
           name  = "REASONING_MODEL"
           value = var.vertex_reasoning_model
         }
-        env {
-          name  = "PORT"
-          value = "8080"
-        }
         
         # Resource limits
         resources {
