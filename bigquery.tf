@@ -71,7 +71,8 @@ resource "google_bigquery_table" "silver_flights_ext" {
     autodetect    = false
     source_uris = [
       # Databricks partitionBy("ingest_date") writes ingest_date=YYYY-MM-DD/ subdirs
-      "gs://${var.project_id}-silver/aviation/cleaned/ingest_date=*/*.parquet",
+      # With hive_partitioning_options, source_uris uses a single trailing wildcard
+      "gs://${var.project_id}-silver/aviation/cleaned/*",
     ]
     hive_partitioning_options {
       mode                     = "AUTO"
@@ -91,7 +92,8 @@ resource "google_bigquery_table" "gold_summary_ext" {
     autodetect    = true
     source_uris = [
       # Databricks partitionBy("summary_type") writes summary_type=*/ subdirs
-      "gs://${var.project_id}-gold/aviation/aggregated/summary_type=*/*.parquet",
+      # With hive_partitioning_options, source_uris uses a single trailing wildcard
+      "gs://${var.project_id}-gold/aviation/aggregated/*",
     ]
     hive_partitioning_options {
       mode                     = "AUTO"
