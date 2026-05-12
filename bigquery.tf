@@ -70,8 +70,14 @@ resource "google_bigquery_table" "silver_flights_ext" {
     source_format = "PARQUET"
     autodetect    = false
     source_uris = [
-      "gs://${var.project_id}-silver/aviation/cleaned/*.parquet",
+      # Databricks partitionBy("ingest_date") writes ingest_date=YYYY-MM-DD/ subdirs
+      "gs://${var.project_id}-silver/aviation/cleaned/ingest_date=*/*.parquet",
     ]
+    hive_partitioning_options {
+      mode                     = "AUTO"
+      source_uri_prefix        = "gs://${var.project_id}-silver/aviation/cleaned/"
+      require_partition_filter = false
+    }
   }
 }
 
@@ -84,8 +90,14 @@ resource "google_bigquery_table" "gold_summary_ext" {
     source_format = "PARQUET"
     autodetect    = true
     source_uris = [
-      "gs://${var.project_id}-gold/aviation/aggregated/gold_summary.parquet",
+      # Databricks partitionBy("summary_type") writes summary_type=*/ subdirs
+      "gs://${var.project_id}-gold/aviation/aggregated/summary_type=*/*.parquet",
     ]
+    hive_partitioning_options {
+      mode                     = "AUTO"
+      source_uri_prefix        = "gs://${var.project_id}-gold/aviation/aggregated/"
+      require_partition_filter = false
+    }
   }
 }
 
