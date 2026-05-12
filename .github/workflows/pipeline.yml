@@ -276,6 +276,8 @@ jobs:
             local run_id="$1"
             local last_life=""
             local last_result=""
+            local waited_seconds=0
+            local max_wait_seconds=3600
             while true; do
               RESP=$(curl -sS -H "Authorization: Bearer ${DBX_TOKEN}" \
                 "${DBX_HOST}/api/2.1/jobs/runs/get?run_id=${run_id}")
@@ -304,7 +306,23 @@ jobs:
               fi
 
               sleep 15
+              waited_seconds=$((waited_seconds + 15))
+              if [ "$waited_seconds" -ge "$max_wait_seconds" ]; then
+                echo "Databricks run timed out after ${max_wait_seconds}s (run_id=${run_id})."
+                echo "$RESP"
+                return 1
+              fi
             done
+          }
+
+          run_stage() {
+            local job_name="$1"
+            local task_key="$2"
+            local notebook_path="$3"
+
+            echo "===== START ${job_name} ====="
+            run_job_by_name "$job_name" "$task_key" "$notebook_path"
+            echo "===== SUCCESS ${job_name} ====="
           }
 
           workspace_path_exists() {
@@ -445,12 +463,12 @@ jobs:
             wait_for_run "${RUN_ID}"
           }
 
-          run_job_by_name "aviation-bronze-to-silver" \
+          run_stage "aviation-bronze-to-silver" \
             "bronze_to_silver" \
             "/aviation-pipeline/bronze_to_silver"
-          run_job_by_name "aviation-silver-to-gold" \
+          run_stage "aviation-silver-to-gold" \
             "silver_to_gold" \
             "/aviation-pipeline/silver_to_gold"
-          run_job_by_name "aviation-export-tables-to-gcs" \
+          run_stage "aviation-export-tables-to-gcs" \
             "export_tables_to_gcs" \
             "/aviation-pipeline/export_tables_to_gcs"
