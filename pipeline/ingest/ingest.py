@@ -286,6 +286,33 @@ def export_rag_documents(storage_client: storage.Client, records: list[dict], ru
     )
     print(f"[ingest-ai] Wrote {len(bq_rows)} vectors → gs://{AI_ARTIFACTS_BUCKET}/{index_path}")
 
+    # Trigger Vertex AI index batch update so the new vectors become queryable
+    _trigger_index_update(f"gs://{AI_ARTIFACTS_BUCKET}/{index_path}")
+
+
+def _trigger_index_update(gcs_uri: str) -> None:
+    """Fire a Vertex AI UpdateIndex call so the BATCH_UPDATE index picks up new vectors."""
+    import vertexai
+    from google.cloud import aiplatform
+
+    vertexai.init(project=PROJECT_ID, location=VERTEX_REGION)
+    aiplatform.init(project=PROJECT_ID, location=VERTEX_REGION)
+
+    try:
+        indexes = aiplatform.MatchingEngineIndex.list(
+            filter='display_name="aviation-rag-index"',
+            project=PROJECT_ID,
+            location=VERTEX_REGION,
+        )
+        if not indexes:
+            print("[ingest-ai] No Vector Search index found; skipping index update trigger.")
+            return
+        index = indexes[0]
+        index.update_embeddings(contents_delta_uri=f"gs://{AI_ARTIFACTS_BUCKET}/aviation/indices/rag/")
+        print(f"[ingest-ai] Triggered Vector Search index update: {index.resource_name}")
+    except Exception as exc:
+        print(f"[ingest-ai] Warning: could not trigger index update: {exc}")
+
 
 def main() -> None:
     today = datetime.utcnow().strftime("%Y-%m-%d")

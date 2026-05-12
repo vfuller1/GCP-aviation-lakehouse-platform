@@ -25,6 +25,13 @@ resource "google_vertex_ai_index" "aviation_rag" {
     contents_delta_uri = "gs://${var.project_id}-ai/aviation/indices/rag/"
   }
 
+  # contents_delta_uri is managed by the ingest job, not Terraform.
+  # Terraform only provisions the index; the ingest pipeline writes vectors
+  # to GCS and triggers index updates via the Vertex AI API.
+  lifecycle {
+    ignore_changes = [metadata]
+  }
+
   depends_on = [
     google_bigquery_table.ai_rag_documents
   ]
