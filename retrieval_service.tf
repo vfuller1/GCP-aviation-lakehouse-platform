@@ -1,6 +1,7 @@
 # Cloud Run Retrieval Service for Aviation Intelligence
 # Deploys the semantic retrieval + reasoning service
 # Gated by enable_vertex_ai
+# Updated: redeploy to pick up patched retrieval image (Vertex SDK fix)
 
 # Service account for the Cloud Run retrieval service
 resource "google_service_account" "aviation_retrieval_sa" {
