@@ -25,6 +25,7 @@ import functools
 from flask import Flask, request, jsonify
 from google.cloud import aiplatform
 from google.cloud import bigquery
+from google.cloud import firestore
 import vertexai
 
 try:
@@ -54,10 +55,16 @@ REASONING_MODEL = os.getenv("REASONING_MODEL", "gemini-2.5-flash")
 EMBEDDING_MODEL = os.getenv("VERTEX_EMBEDDING_MODEL", "text-embedding-005")
 PORT = int(os.getenv("PORT", 8080))
 
+# Session memory config
+SESSION_MAX_TURNS = int(os.getenv("SESSION_MAX_TURNS", "10"))   # turns kept per session
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "3600"))  # 1-hour idle expiry
+FIRESTORE_DATABASE = os.getenv("FIRESTORE_DATABASE", "rag-sessions")
+
 # Initialize clients (lazy)
 _bq_client = None
 _embedding_client = None
 _reasoning_client = None
+_firestore_client = None
 
 
 def _resource_id(value: str) -> str:
@@ -65,6 +72,50 @@ def _resource_id(value: str) -> str:
     if not value:
         return ""
     return value.split("/")[-1]
+
+
+# ---------------------------------------------------------------------------
+# Session memory helpers (Firestore-backed)
+# ---------------------------------------------------------------------------
+
+def get_firestore_client():
+    """Lazy initialize Firestore client."""
+    global _firestore_client
+    if _firestore_client is None:
+        _firestore_client = firestore.Client(project=PROJECT_ID, database=FIRESTORE_DATABASE)
+    return _firestore_client
+
+
+def _session_doc(session_id: str):
+    """Return the Firestore DocumentReference for a session."""
+    return get_firestore_client().collection("sessions").document(session_id)
+
+
+def get_session_history(session_id: str) -> List[Dict[str, str]]:
+    """Load turn list for a session from Firestore. Returns [] if not found."""
+    try:
+        doc = _session_doc(session_id).get()
+        if doc.exists:
+            return doc.to_dict().get("turns", [])
+    except Exception as e:
+        logger.warning(f"Failed to read session {session_id} from Firestore: {e}")
+    return []
+
+
+def append_session_turn(session_id: str, question: str, answer: str) -> None:
+    """Append a Q&A turn to the Firestore session document, capped at SESSION_MAX_TURNS."""
+    try:
+        ref = _session_doc(session_id)
+        doc = ref.get()
+        turns: List[Dict[str, str]] = doc.to_dict().get("turns", []) if doc.exists else []
+        turns.append({"role": "user",      "content": question})
+        turns.append({"role": "assistant", "content": answer})
+        # Keep only the most recent turns (2 entries per turn)
+        turns = turns[-(SESSION_MAX_TURNS * 2):]
+        expire_at = datetime.utcnow() + timedelta(seconds=SESSION_TTL_SECONDS)
+        ref.set({"turns": turns, "expireAt": expire_at}, merge=False)
+    except Exception as e:
+        logger.warning(f"Failed to persist session {session_id} to Firestore: {e}")
 
 
 def _metadata_to_dict(metadata: Any) -> Dict[str, Any]:
@@ -287,9 +338,18 @@ def query_bigquery_fallback(
 def build_reasoning_prompt(
     question: str,
     context_docs: List[Dict[str, Any]],
-    deterministic_facts: List[Dict[str, Any]]
+    deterministic_facts: List[Dict[str, Any]],
+    history: Optional[List[Dict[str, str]]] = None
 ) -> str:
-    """Build a prompt for Vertex Reasoning with retrieved context and facts."""
+    """Build a prompt for Vertex Reasoning with retrieved context, facts, and chat history."""
+    history_str = ""
+    if history:
+        history_str = "**Conversation History:**\n"
+        for turn in history:
+            role_label = "User" if turn["role"] == "user" else "Assistant"
+            history_str += f"{role_label}: {turn['content']}\n"
+        history_str += "\n"
+
     context_str = ""
     if context_docs:
         context_str = "**Retrieved Aviation Documents:**\n"
@@ -307,7 +367,7 @@ def build_reasoning_prompt(
 Provide a clear, grounded answer with specific data citations (e.g., "Route ATL-LAX has a 67% disruption rate based on 450 flights").
 If uncertain, acknowledge the limitation.
 
-Question: {question}
+{history_str}Question: {question}
 
 {context_str}
 {facts_str}
@@ -373,11 +433,17 @@ def retrieve():
         route = payload.get("route", "").upper() or None
         days_back = payload.get("days_back", 7)
         top_k = payload.get("top_k", 5)
+        session_id = payload.get("session_id", "").strip() or None
         
         if not question:
             return jsonify({"error": "Missing 'question' field"}), 400
         
-        logger.info(f"Query: {question} (airline={airline}, route={route}, days_back={days_back})")
+        logger.info(f"Query: {question} (airline={airline}, route={route}, days_back={days_back}, session={session_id})")
+
+        # Load conversation history for this session (if any)
+        history: List[Dict[str, str]] = []
+        if session_id:
+            history = get_session_history(session_id)
         
         # 1. Embed the query (best effort)
         query_vector = embed_query(question)
@@ -398,16 +464,20 @@ def retrieve():
         facts = query_bigquery_fallback(query_type, airline=airline, route=route, days_back=days_back)
         logger.info(f"Retrieved {len(facts)} fact rows from BigQuery")
         
-        # 4. Build reasoning prompt
-        prompt = build_reasoning_prompt(question, context_docs, facts)
+        # 4. Build reasoning prompt (with history)
+        prompt = build_reasoning_prompt(question, context_docs, facts, history=history)
         
         # 5. Call Vertex Reasoning
         answer = reason_with_vertex(prompt)
         if answer.startswith("Unable to generate model narrative"):
             answer = f"{answer} {build_fallback_answer(question, facts)}"
         logger.info(f"Generated answer: {answer[:100]}...")
+
+        # 6. Persist this turn to session memory
+        if session_id:
+            append_session_turn(session_id, question, answer)
         
-        # 6. Format response with citations
+        # 7. Format response with citations
         sources = [
             {
                 "doc_id": doc.get("doc_id"),
@@ -423,6 +493,8 @@ def retrieve():
         return jsonify({
             "question": question,
             "answer": answer,
+            "session_id": session_id,
+            "history_turns": len(history) // 2,
             "context_count": len(context_docs),
             "facts_count": len(facts),
             "sources": sources,
@@ -446,6 +518,31 @@ def readiness():
     except Exception as e:
         logger.error(f"Readiness check failed: {e}")
         return jsonify({"ready": False, "error": str(e)}), 503
+
+
+@app.route("/session/clear", methods=["POST"])
+def session_clear():
+    """
+    Clear conversation history for a session.
+
+    Request JSON:
+    {
+        "session_id": "my-session-123"
+    }
+    """
+    payload = request.get_json(silent=True) or {}
+    session_id = payload.get("session_id", "").strip()
+    if not session_id:
+        return jsonify({"error": "Missing 'session_id' field"}), 400
+    try:
+        ref = _session_doc(session_id)
+        existed = ref.get().exists
+        ref.delete()
+        logger.info(f"Cleared session: {session_id} (existed={existed})")
+        return jsonify({"session_id": session_id, "cleared": existed}), 200
+    except Exception as e:
+        logger.error(f"Failed to clear session {session_id}: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

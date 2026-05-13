@@ -51,6 +51,7 @@ jobs:
             container.googleapis.com \
             artifactregistry.googleapis.com \
             aiplatform.googleapis.com \
+            firestore.googleapis.com \
             run.googleapis.com \
             --project=${{ secrets.GCP_PROJECT_ID }}
 
