@@ -21,3 +21,13 @@ resource "google_firestore_field" "session_ttl" {
 
   ttl_config {}
 }
+
+# Grant the Cloud Run retrieval service account read/write access to Firestore
+resource "google_project_iam_member" "retrieval_firestore_user" {
+  count   = var.enable_vertex_ai ? 1 : 0
+  project = var.project_id
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.aviation_retrieval_sa[0].email}"
+
+  depends_on = [google_firestore_database.rag_sessions]
+}
