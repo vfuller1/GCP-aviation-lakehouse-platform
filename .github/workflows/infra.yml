@@ -57,14 +57,22 @@ jobs:
 
       - name: Terraform Init
         run: |
-          # -upgrade re-resolves all providers against current constraints,
-          # regenerates the lock file, and avoids stale-cache checksum mismatches.
-          # Retry up to 3 times to handle transient registry / GitHub 404s.
+          # -upgrade re-resolves providers fresh against current constraints,
+          # bypassing any stale lock file restored from git.
+          # Exit non-zero if all retries fail so the step is properly marked failed.
+          success=false
           for attempt in 1 2 3; do
-            terraform init -upgrade && break
+            if terraform init -upgrade; then
+              success=true
+              break
+            fi
             echo "terraform init attempt ${attempt} failed; retrying in 15s..."
             sleep 15
           done
+          if [ "$success" != "true" ]; then
+            echo "All terraform init attempts failed."
+            exit 1
+          fi
 
       - name: Terraform Plan
         run: terraform plan -lock-timeout=15m -input=false
