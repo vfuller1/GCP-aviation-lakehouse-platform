@@ -55,7 +55,9 @@ print(f"[export_to_gcs] Gold table: {GOLD_TABLE} ({gold_count} rows)")
     df_gold
     .write
     .mode("overwrite")
-    .partitionBy("summary_type")
+    # No partitionBy — flat Parquet so BigQuery can use *.parquet glob (single wildcard)
+    # and so summary_type remains a regular data column (partitionBy strips it from
+    # Parquet files into directory names, making it invisible to BigQuery views).
     .parquet(GOLD_EXPORT_PATH)
 )
 

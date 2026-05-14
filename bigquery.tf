@@ -84,16 +84,10 @@ resource "google_bigquery_table" "gold_summary_ext" {
   external_data_configuration {
     source_format = "PARQUET"
     autodetect    = true
-    # Explicit per-partition URIs using *.parquet (single wildcard per URI).
-    # BigQuery does not support multiple * in one URI (e.g. */*.parquet is invalid).
-    # Spark writes _committed_* metadata files inside each partition directory;
-    # *.parquet suffix ensures those are excluded.
-    source_uris = [
-      "gs://${var.project_id}-gold/aviation/aggregated/summary_type=by_airline/*.parquet",
-      "gs://${var.project_id}-gold/aviation/aggregated/summary_type=by_route/*.parquet",
-      "gs://${var.project_id}-gold/aviation/aggregated/summary_type=delayed_by_day/*.parquet",
-      "gs://${var.project_id}-gold/aviation/aggregated/summary_type=on_time_pct/*.parquet",
-    ]
+    # Flat export (no summary_type partitioning) so *.parquet is valid (single wildcard).
+    # summary_type remains a regular data column in the Parquet files, so views can
+    # filter with WHERE summary_type = '...' without hive partitioning.
+    source_uris = ["gs://${var.project_id}-gold/aviation/aggregated/*.parquet"]
   }
 }
 
