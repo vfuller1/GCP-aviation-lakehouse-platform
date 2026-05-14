@@ -46,7 +46,8 @@ print(f"[export_to_gcs] Gold table: {GOLD_TABLE} ({gold_count} rows)")
     df_silver
     .write
     .mode("overwrite")
-    .partitionBy("ingest_date")
+    # No partitionBy — flat Parquet so BigQuery can use *.parquet glob (single wildcard).
+    # ingest_date remains a data column; BigQuery views filter by it as needed.
     .parquet(SILVER_EXPORT_PATH)
 )
 

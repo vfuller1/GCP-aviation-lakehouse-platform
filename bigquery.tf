@@ -69,17 +69,9 @@ resource "google_bigquery_table" "silver_flights_ext" {
   external_data_configuration {
     source_format = "PARQUET"
     autodetect    = false
-    source_uris = [
-      # Glob restricted to *.parquet to exclude Databricks Delta metadata files
-      # (_committed_*, _started_*, _delta_log/) which are not Parquet format
-      "gs://${var.project_id}-silver/aviation/cleaned/*.parquet",
-      "gs://${var.project_id}-silver/aviation/cleaned/*/*.parquet",
-    ]
-    hive_partitioning_options {
-      mode                     = "AUTO"
-      source_uri_prefix        = "gs://${var.project_id}-silver/aviation/cleaned/"
-      require_partition_filter = false
-    }
+    # Flat export (no ingest_date partitioning) so *.parquet is valid (single wildcard).
+    # BigQuery does not support multiple * in a single GCS URI.
+    source_uris = ["gs://${var.project_id}-silver/aviation/cleaned/*.parquet"]
   }
 }
 
@@ -91,17 +83,16 @@ resource "google_bigquery_table" "gold_summary_ext" {
   external_data_configuration {
     source_format = "PARQUET"
     autodetect    = true
+    # Explicit per-partition URIs using *.parquet (single wildcard per URI).
+    # BigQuery does not support multiple * in one URI (e.g. */*.parquet is invalid).
+    # Spark writes _committed_* metadata files inside each partition directory;
+    # *.parquet suffix ensures those are excluded.
     source_uris = [
-      # Glob restricted to *.parquet to exclude Databricks Delta metadata files
-      # (_committed_*, _started_*, _delta_log/) which are not Parquet format
-      "gs://${var.project_id}-gold/aviation/aggregated/*.parquet",
-      "gs://${var.project_id}-gold/aviation/aggregated/*/*.parquet",
+      "gs://${var.project_id}-gold/aviation/aggregated/summary_type=by_airline/*.parquet",
+      "gs://${var.project_id}-gold/aviation/aggregated/summary_type=by_route/*.parquet",
+      "gs://${var.project_id}-gold/aviation/aggregated/summary_type=delayed_by_day/*.parquet",
+      "gs://${var.project_id}-gold/aviation/aggregated/summary_type=on_time_pct/*.parquet",
     ]
-    hive_partitioning_options {
-      mode                     = "AUTO"
-      source_uri_prefix        = "gs://${var.project_id}-gold/aviation/aggregated/"
-      require_partition_filter = false
-    }
   }
 }
 
