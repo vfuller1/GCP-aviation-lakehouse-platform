@@ -70,9 +70,10 @@ resource "google_bigquery_table" "silver_flights_ext" {
     source_format = "PARQUET"
     autodetect    = false
     source_uris = [
-      # Databricks partitionBy("ingest_date") writes ingest_date=YYYY-MM-DD/ subdirs
-      # With hive_partitioning_options, source_uris uses a single trailing wildcard
-      "gs://${var.project_id}-silver/aviation/cleaned/*",
+      # Glob restricted to *.parquet to exclude Databricks Delta metadata files
+      # (_committed_*, _started_*, _delta_log/) which are not Parquet format
+      "gs://${var.project_id}-silver/aviation/cleaned/*.parquet",
+      "gs://${var.project_id}-silver/aviation/cleaned/*/*.parquet",
     ]
     hive_partitioning_options {
       mode                     = "AUTO"
@@ -91,9 +92,10 @@ resource "google_bigquery_table" "gold_summary_ext" {
     source_format = "PARQUET"
     autodetect    = true
     source_uris = [
-      # Databricks partitionBy("summary_type") writes summary_type=*/ subdirs
-      # With hive_partitioning_options, source_uris uses a single trailing wildcard
-      "gs://${var.project_id}-gold/aviation/aggregated/*",
+      # Glob restricted to *.parquet to exclude Databricks Delta metadata files
+      # (_committed_*, _started_*, _delta_log/) which are not Parquet format
+      "gs://${var.project_id}-gold/aviation/aggregated/*.parquet",
+      "gs://${var.project_id}-gold/aviation/aggregated/*/*.parquet",
     ]
     hive_partitioning_options {
       mode                     = "AUTO"
