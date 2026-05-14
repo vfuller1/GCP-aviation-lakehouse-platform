@@ -77,8 +77,9 @@ resource "google_bigquery_table" "silver_flights_ext" {
 
 # External table over Gold Parquet export in GCS.
 resource "google_bigquery_table" "gold_summary_ext" {
-  dataset_id = google_bigquery_dataset.analytics_layer.dataset_id
-  table_id   = "gold_summary_ext"
+  dataset_id          = google_bigquery_dataset.analytics_layer.dataset_id
+  table_id            = "gold_summary_ext"
+  deletion_protection = false
 
   external_data_configuration {
     source_format = "PARQUET"

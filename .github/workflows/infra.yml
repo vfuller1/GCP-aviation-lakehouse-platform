@@ -102,6 +102,17 @@ jobs:
           echo "Timed out waiting for ${IMAGE_PATH}:latest"
           exit 1
 
+      - name: Drop external tables to allow recreation
+        if: github.ref == 'refs/heads/main'
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          # BigQuery cannot remove hive_partitioning_options in-place on existing tables.
+          # Drop both external tables so Terraform recreates them with the correct flat config.
+          # These are EXTERNAL tables — dropping them does not delete any data in GCS.
+          bq rm -f -t "${PROJECT_ID}:aviation_analytics.silver_flights_ext" || true
+          bq rm -f -t "${PROJECT_ID}:aviation_analytics.gold_summary_ext" || true
+
       - name: Terraform Apply
         if: github.ref == 'refs/heads/main'
         run: terraform apply -lock-timeout=15m -input=false -auto-approve
