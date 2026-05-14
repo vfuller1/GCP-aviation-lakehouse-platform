@@ -1,6 +1,6 @@
 # GCP Aviation Lakehouse Platform
 
-A fully automated, cloud-native data lakehouse built on Google Cloud Platform that ingests synthetic aviation flight data, applies medallion-architecture transformations via Databricks, and surfaces analytics through BigQuery BI views — all triggered from a single `git push`.
+A fully automated, cloud-native data lakehouse built on Google Cloud Platform that ingests synthetic aviation flight data, applies medallion-architecture transformations, and surfaces analytics through BigQuery BI views and a Gemini-powered RAG retrieval service — all triggered from a single `git push`.
 
 ---
 
@@ -9,22 +9,21 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 - [Architecture Overview](#architecture-overview)
 - [Repository Structure](#repository-structure)
 - [Infrastructure](#infrastructure)
-  - [GCS Medallion Buckets](#gcs-medallion-buckets)
-  - [GKE Autopilot Cluster](#gke-autopilot-cluster)
-  - [Databricks Workspace](#databricks-workspace)
-  - [BigQuery BI Layer](#bigquery-bi-layer)
 - [Data Pipeline](#data-pipeline)
   - [Stage 1 — Ingest (Source → Bronze)](#stage-1--ingest-source--bronze)
   - [Stage 2 — Bronze → Silver](#stage-2--bronze--silver)
   - [Stage 3 — Silver → Gold](#stage-3--silver--gold)
   - [Stage 4 — Export to GCS (Parquet)](#stage-4--export-to-gcs-parquet)
+- [AI / RAG Layer](#ai--rag-layer)
+  - [Embeddings Pipeline](#embeddings-pipeline)
+  - [Vector Search](#vector-search)
+  - [Retrieval Service](#retrieval-service)
+  - [Session Memory](#session-memory)
+- [BigQuery Views Reference](#bigquery-views-reference)
 - [CI/CD Workflows](#cicd-workflows)
-  - [infra.yml — Terraform Apply](#infrayml--terraform-apply)
-  - [pipeline.yml — Build, Push & Deploy](#pipelineyml--build-push--deploy)
 - [End-to-End Runtime Sequence](#end-to-end-runtime-sequence)
 - [Prerequisites & Secrets](#prerequisites--secrets)
 - [Configuration Variables](#configuration-variables)
-- [BigQuery Views Reference](#bigquery-views-reference)
 
 ---
 
@@ -33,27 +32,34 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 ```
 GitHub push
     │
-    ├─[infra.yml]──► Terraform ──► GCS buckets + BigQuery + GKE + Databricks
+    ├─[infra.yml]──► Terraform ──► GCS · BigQuery · GKE · Vertex AI · Vector Search
+    │                               Cloud Run · Firestore · Artifact Registry
     │
-    └─[pipeline.yml]─► Docker build/push ──► GKE deploy ──► Ingest job (Bronze)
-                                                                     │
-                                                        Databricks: Bronze → Silver
-                                                                     │
-                                                        Databricks: Silver → Gold
-                                                                     │
-                                                        Databricks: Export to GCS (Parquet)
-                                                                     │
-                                                        BigQuery views (query-ready)
+    └─[pipeline.yml]─► Docker build/push ──► GKE CronJob (Bronze ingest)
+                                                    │
+                                          Vertex AI text-embedding-005
+                                          ai_rag_documents (BigQuery)
+                                                    │
+                                          Databricks: Bronze → Silver → Gold
+                                                    │
+                                          GCS Parquet (Silver / Gold)
+                                                    │
+                                          BigQuery external tables + BI views
+                                                    │
+                                    Cloud Run Retrieval Service (Flask + Gemini)
+                                                    │
+                                           Firestore session memory
 ```
 
 The platform follows the **Medallion Architecture** (Bronze / Silver / Gold):
 
-| Layer  | Storage | Format | Contents |
-|--------|---------|--------|----------|
+| Layer | Storage | Format | Contents |
+|-------|---------|--------|----------|
 | Bronze | `gcp-lakehouseproject-bronze` | CSV | Raw, unvalidated flight records |
-| Silver | `gcp-lakehouseproject-silver` | Parquet (Delta) | Cleaned, validated, deduplicated flights |
-| Gold   | `gcp-lakehouseproject-gold`   | Parquet (Delta) | Business-level aggregations |
-| BI     | BigQuery `aviation_analytics` | External tables + Views | Ready for dashboards and ad-hoc queries |
+| Silver | `gcp-lakehouseproject-silver` | Parquet (flat) | Cleaned, validated, deduplicated flights |
+| Gold | `gcp-lakehouseproject-gold` | Parquet (flat) | Business-level aggregations |
+| AI | `gcp-lakehouseproject-ai` | JSON embeddings | RAG documents + Vertex AI index data |
+| BI | BigQuery `aviation_analytics` | External tables + Views | Dashboard-ready analytics |
 
 ---
 
@@ -63,29 +69,39 @@ The platform follows the **Medallion Architecture** (Bronze / Silver / Gold):
 .
 ├── .github/
 │   └── workflows/
-│       ├── infra.yml            # Terraform provisioning workflow
-│       └── pipeline.yml         # Build, deploy & run pipeline workflow
+│       ├── infra.yml                  # Terraform provisioning workflow
+│       └── pipeline.yml               # Build, deploy & run pipeline workflow
 ├── databricks_notebooks/
-│   ├── bronze_to_silver.py      # Bronze → Silver transformation notebook
-│   ├── silver_to_gold.py        # Silver → Gold aggregation notebook
-│   └── export_tables_to_gcs.py  # Delta → GCS Parquet export notebook
+│   ├── bronze_to_silver.py            # Bronze → Silver transformation
+│   ├── silver_to_gold.py              # Silver → Gold aggregation
+│   └── export_tables_to_gcs.py        # Delta → GCS Parquet export (flat, no partitionBy)
 ├── k8s/
-│   ├── namespace.yaml           # Kubernetes namespace definition
-│   ├── service-account.yaml     # K8s service account (Workload Identity)
-│   └── ingest-cronjob.yaml      # Daily ingest CronJob (06:00 UTC)
+│   ├── namespace.yaml                 # Kubernetes namespace
+│   ├── service-account.yaml           # K8s service account (Workload Identity)
+│   └── ingest-cronjob.yaml            # Daily ingest CronJob (06:00 UTC)
 ├── pipeline/
 │   └── ingest/
-│       ├── Dockerfile           # Python 3.11 container for the ingest job
-│       ├── ingest.py            # Synthetic flight data generator
-│       └── requirements.txt     # Python dependencies (google-cloud-storage)
-├── backend.tf                   # Terraform GCS backend configuration
-├── bigquery.tf                  # BigQuery dataset, external tables, BI views
-├── databricks.tf                # Databricks workspace + jobs (optional)
-├── gke.tf                       # GKE Autopilot cluster + Artifact Registry + IAM
-├── imports.tf                   # Terraform import blocks
-├── provider.tf                  # GCP & Databricks Terraform providers
-├── storage.tf                   # GCS medallion bucket definitions
-└── variables.tf                 # Input variable declarations
+│       ├── Dockerfile                 # Python 3.11 ingest container
+│       ├── ingest.py                  # Synthetic flight data generator + embeddings
+│       └── requirements.txt
+├── retrieval_service/
+│   ├── Dockerfile                     # Python 3.11 retrieval service container
+│   ├── retrieval_service.py           # Flask RAG service (Gemini 2.5 Flash)
+│   └── requirements.txt
+├── tests/
+│   └── test_retrieval_e2e.py          # E2E smoke tests for retrieval service
+├── backend.tf                         # Terraform GCS backend + provider versions
+├── bigquery.tf                        # BigQuery dataset, external tables, BI/AI views
+├── databricks.tf                      # Databricks workspace + jobs (optional)
+├── firestore.tf                       # Firestore session memory database
+├── gke.tf                             # GKE Autopilot cluster + Artifact Registry + IAM
+├── imports.tf                         # Terraform import blocks for existing resources
+├── provider.tf                        # GCP Terraform provider
+├── retrieval_service.tf               # Cloud Run retrieval service + IAM
+├── storage.tf                         # GCS medallion bucket definitions
+├── variables.tf                       # Input variable declarations
+├── vector_search.tf                   # Vertex AI Vector Search index + endpoint
+└── vertex_ai.tf                       # Vertex AI APIs + service accounts + IAM
 ```
 
 ---
@@ -144,33 +160,34 @@ A `aviation_analytics` BigQuery dataset is always created. Once Parquet files ar
 ### Stage 1 — Ingest (Source → Bronze)
 
 **Component**: `pipeline/ingest/ingest.py`  
-**Runtime**: GKE Autopilot pod, scheduled daily at **06:00 UTC** via CronJob  
-**Authentication**: Workload Identity (no credentials in the container)
+**Runtime**: GKE Autopilot CronJob — daily at **06:00 UTC**  
+**Authentication**: Workload Identity (no embedded credentials)
 
-The ingest job generates **1,000 synthetic flight records** per run using the following data model:
+Generates **5,000 synthetic flight records** per run and writes to the Bronze bucket. Also generates Vertex AI embeddings and writes RAG documents to BigQuery.
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `flight_id` | UUID | Unique flight identifier |
-| `airline` | String | IATA airline code (AA, DL, UA, WN, B6, AS, NK, F9, G4, HA) |
+| `airline` | String | IATA code (AA, DL, UA, WN, B6, AS, NK, F9, G4, HA) |
 | `origin` | String | Origin airport IATA code |
 | `destination` | String | Destination airport IATA code |
-| `departure_delay_min` | Int | Departure delay in minutes (−15 to 240) |
-| `arrival_delay_min` | Int | Arrival delay in minutes |
-| `weather_flag` | Boolean | ~15% of flights are weather-related |
+| `departure_delay_min` | Int | Departure delay (−15 to 240 min) |
+| `arrival_delay_min` | Int | Arrival delay |
+| `weather_flag` | Boolean | ~15% of flights weather-related |
 | `status` | String | ON_TIME / DELAYED / CANCELLED / DIVERTED |
-| `event_ts` | Timestamp | UTC timestamp of record generation |
+| `event_ts` | Timestamp | UTC generation timestamp |
 
-Configurable environment variables in the K8s manifest:
+**Key environment variables (set in `k8s/ingest-cronjob.yaml`):**
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GCP_PROJECT_ID` | `gcp-lakehouseproject` | GCP project |
-| `BRONZE_BUCKET` | `gcp-lakehouseproject-bronze` | Target GCS bucket |
-| `NUM_RECORDS` | `1000` | Records per run |
-| `BAD_DATA_RATE` | `0.0` | Fraction of intentionally corrupted records (0.0–1.0) |
+| Variable | Value | Description |
+|----------|-------|-------------|
+| `NUM_RECORDS` | `5000` | Records per run |
+| `BAD_DATA_RATE` | `0.02` | Fraction of intentionally corrupted records |
+| `ENABLE_RAG_DOC_EXPORT` | `true` | Write RAG docs to `ai_rag_documents` |
+| `ENABLE_VERTEX_EMBEDDINGS` | `true` | Generate Vertex AI embeddings |
+| `VERTEX_EMBEDDING_MODEL` | `text-embedding-005` | Embedding model |
 
-Output path: `gs://gcp-lakehouseproject-bronze/aviation/raw/date=YYYY-MM-DD/flights.csv`
+**Output**: `gs://gcp-lakehouseproject-bronze/aviation/raw/date=YYYY-MM-DD/flights.csv`
 
 ---
 
@@ -212,43 +229,86 @@ Four business aggregations are computed and unioned into a single summary table:
 **Notebook**: `databricks_notebooks/export_tables_to_gcs.py`  
 **Databricks Job**: `aviation-export-tables-to-gcs`
 
-Reads Silver and Gold Delta tables and writes to GCS as Parquet:
+Reads Silver and Gold Delta tables and writes **flat Parquet** (no `partitionBy`) to GCS. This ensures all columns — including partition columns like `summary_type` — are present as data columns in the Parquet bytes, which BigQuery external tables require for direct queries and views.
 
-| Source Delta Table | GCS Path | Partition |
-|--------------------|----------|-----------|
-| `workspace.aviation.silver_flights` | `gs://gcp-lakehouseproject-silver/aviation/cleaned/` | `ingest_date` |
-| `workspace.aviation.gold_flight_summary` | `gs://gcp-lakehouseproject-gold/aviation/aggregated/` | `summary_type` |
+| Source Delta Table | GCS Path |
+|--------------------|----------|
+| `workspace.aviation.silver_flights` | `gs://gcp-lakehouseproject-silver/aviation/cleaned/*.parquet` |
+| `workspace.aviation.gold_flight_summary` | `gs://gcp-lakehouseproject-gold/aviation/aggregated/*.parquet` |
 
-> **Note**: This stage requires a **classic Databricks cluster** configured with GCS credentials. It is not compatible with Serverless compute.
+> **Note**: This stage requires a **classic Databricks cluster** with GCS credentials. It is not compatible with Serverless compute.
 
 ---
 
-## CI/CD Workflows
+## AI / RAG Layer
+
+### Embeddings Pipeline
+
+During ingest, each flight record is summarized into a natural-language sentence and embedded using **Vertex AI `text-embedding-005`** (768-dimensional). These embeddings are written to the `ai_rag_documents` BigQuery native table with metadata fields for retrieval.
+
+### Vector Search
+
+A Vertex AI Vector Search **index** (`aviation-rag-index`) is built from the `ai_rag_documents` embeddings and deployed to an endpoint (`aviation-rag-endpoint`). The retrieval service queries this endpoint using cosine similarity (DOT_PRODUCT on normalized vectors) to find the most relevant flight records for a given question.
+
+> **Note**: The Vector Search index runs in BATCH_UPDATE mode. After a large ingest, allow 1–2 hours for the index to rebuild.
+
+### Retrieval Service
+
+A Flask application deployed on **Cloud Run** (`aviation-retrieval`) implements a Retrieval-Augmented Generation (RAG) pattern:
+
+1. Embed the user question using `text-embedding-005`
+2. Query Vector Search for the top-K nearest neighbours
+3. Fetch the matching RAG documents from BigQuery
+4. Send the retrieved context + question to **Gemini 2.5 Flash**
+5. Return the structured answer
+
+**Base URL**: `https://aviation-retrieval-ohvijuloea-uc.a.run.app`
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Liveness check |
+| `/health/ready` | GET | Readiness check (verifies BQ + Vector Search connectivity) |
+| `/retrieve` | POST | RAG query: returns answer + citations |
+| `/session/clear` | POST | Clear Firestore session history |
+
+**Example** — ask a delay question:
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Which routes have the highest weather-related delays?", "session_id": "demo-1"}'
+```
+
+### Session Memory
+
+Conversation history is stored in **Firestore** (`rag-sessions` database). Each `POST /retrieve` call appends the Q&A turn to `sessions/{session_id}`. Sessions expire automatically after 1 hour (TTL on `expireAt`).
+
+---
 
 ### infra.yml — Terraform Apply
 
-**Trigger**: Push to `main` touching any `.tf` file, `.terraform.lock.hcl`, or `infra.yml`; also supports `workflow_dispatch`.
+**Trigger**: Push to `main` touching any `.tf` file or `infra.yml`; also `workflow_dispatch`.
 
 **Steps**:
-1. Authenticate to GCP using `GCP_SA_KEY`
-2. Enable prerequisite APIs (Container, IAM, Artifact Registry, Resource Manager)
-3. `terraform init` → `terraform plan` → `terraform apply`
+1. Authenticate to GCP (`GCP_SA_KEY`)
+2. Enable prerequisite APIs
+3. Drop BigQuery external tables (pre-apply, to allow schema changes)
+4. `terraform init -upgrade` (3-attempt retry loop)
+5. `terraform plan` → `terraform apply`
+
+> The `--upgrade` flag ensures provider versions are re-resolved without relying on a committed lock file.
 
 ### pipeline.yml — Build, Push & Deploy
 
-**Trigger**: Push to `main` touching `pipeline/**`, `k8s/**`, or `pipeline.yml`; also supports `workflow_dispatch` with an optional `run_ingest_now` boolean input.
+**Trigger**: Push to `main` touching `pipeline/**`, `retrieval_service/**`, `k8s/**`, or `pipeline.yml`; also `workflow_dispatch` with optional `run_ingest_now` boolean.
 
 **Steps**:
 1. Authenticate to GCP
-2. Build Docker image from `pipeline/ingest/` tagged with commit SHA + `latest`
-3. Push image to Artifact Registry (`us-central1-docker.pkg.dev/<PROJECT>/aviation-pipeline/ingest`)
-4. Fetch GKE credentials and apply K8s manifests (`namespace`, `service-account`, `ingest-cronjob`)
-5. Update CronJob image to the new commit SHA
-6. Trigger a one-off ingest job immediately (on every `push` or when `run_ingest_now=true`)
-7. Run Databricks pipeline sequentially: **Bronze → Silver → Gold → Export**
-   - Syncs notebooks from `databricks_notebooks/` to the Databricks workspace
-   - Falls back to one-off run submission if named jobs don't exist yet
-   - Skips Databricks steps gracefully if `DATABRICKS_HOST`/`DATABRICKS_TOKEN` secrets are not set
+2. Build + push ingest Docker image to Artifact Registry
+3. Build + push retrieval service Docker image and deploy to Cloud Run
+4. Apply K8s manifests and update CronJob image to new commit SHA
+5. Trigger one-off ingest job (on every push or when `run_ingest_now=true`)
+6. Run Databricks pipeline: Bronze → Silver → Gold → Export
+   - Gracefully skips if `DATABRICKS_HOST`/`DATABRICKS_TOKEN` are not set
 
 ---
 
@@ -289,19 +349,19 @@ Reads Silver and Gold Delta tables and writes to GCS as Parquet:
 
 ## Prerequisites & Secrets
 
-Configure the following **GitHub Actions secrets** in your repository settings:
+Configure the following **GitHub Actions secrets**:
 
 | Secret | Description |
 |--------|-------------|
-| `GCP_SA_KEY` | Service account JSON key with roles: `artifactregistry.writer`, `container.developer`, `storage.admin`, `bigquery.admin`, `iam.serviceAccountAdmin` |
+| `GCP_SA_KEY` | Service account JSON key with `storage.admin`, `bigquery.admin`, `artifactregistry.writer`, `container.developer`, `iam.serviceAccountAdmin`, `run.admin`, `datastore.user` |
 | `GCP_PROJECT_ID` | GCP project ID (e.g. `gcp-lakehouseproject`) |
 | `GKE_CLUSTER_NAME` | GKE cluster name (e.g. `aviation-pipeline`) |
-| `GKE_REGION` | GKE cluster region (e.g. `us-central1`) |
-| `DATABRICKS_HOST` | Databricks workspace URL (e.g. `https://<workspace>.gcp.databricks.com`) |
+| `GKE_REGION` | GKE region (e.g. `us-central1`) |
+| `DATABRICKS_HOST` | Databricks workspace URL |
 | `DATABRICKS_TOKEN` | Databricks personal access token |
-| `DATABRICKS_ACCOUNT_ID` | Databricks account ID (for workspace provisioning via Terraform) |
+| `DATABRICKS_ACCOUNT_ID` | Databricks account ID (for Terraform provisioning) |
 
-> `DATABRICKS_*` secrets are optional. If not set, the Databricks pipeline steps are skipped gracefully.
+> `DATABRICKS_*` secrets are optional. If not set, all Databricks steps are skipped.
 
 ---
 
@@ -312,32 +372,38 @@ Defined in `variables.tf`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `project_id` | `gcp-lakehouseproject` | GCP Project ID |
-| `region` | `us-central1` | Default region for all resources |
-| `enable_gke` | `false` | Enable GKE Autopilot cluster, Artifact Registry, and pipeline IAM |
-| `enable_databricks` | `false` | Enable Databricks workspace provisioning via Terraform |
+| `region` | `us-central1` | Default region |
+| `enable_gke` | `false` | Enable GKE Autopilot cluster + pipeline IAM |
+| `enable_vertex_ai` | `false` | Enable Vertex AI + Vector Search + Cloud Run retrieval |
+| `enable_databricks` | `false` | Enable Databricks workspace provisioning |
 | `databricks_host` | `null` | Databricks workspace host URL |
-| `databricks_token` | `null` | Databricks personal access token (sensitive) |
+| `databricks_token` | `null` | Databricks PAT (sensitive) |
 | `databricks_account_id` | `null` | Databricks account ID |
 
-In the `infra.yml` workflow, `enable_gke` is set to `"true"` via the `TF_VAR_enable_gke` environment variable.
+In `infra.yml`, `enable_gke` and `enable_vertex_ai` are both set to `"true"` via `TF_VAR_*` environment variables.
 
 ---
 
 ## BigQuery Views Reference
 
-All views live in the `aviation_analytics` dataset and query the `gold_summary_ext` external table.
+All views live in the `aviation_analytics` dataset.
 
-### `bi_airline_performance_v`
-Airline-level delay KPIs — average departure delay, arrival delay, and total flight count per airline.
+### BI Views (query `gold_summary_ext`)
 
-### `bi_route_performance_v`
-Route-level delay leaderboard — same KPIs grouped by `ORIGIN-DEST` route pair.
+| View | Description |
+|------|-------------|
+| `bi_airline_performance_v` | Average departure/arrival delay and total flights per airline |
+| `bi_route_performance_v` | Same KPIs grouped by `ORIGIN→DEST` route |
+| `bi_daily_delays_v` | Count of delayed flights per calendar date |
+| `bi_pipeline_refresh_v` | Data freshness: latest `generated_ts`, row counts by `summary_type` |
 
-### `bi_daily_delays_v`
-Daily trend of delayed flights — count of delayed flights per calendar date.
+### AI Views (query `ai_rag_documents`)
 
-### `bi_pipeline_refresh_v`
-Pipeline health dashboard — shows the latest `generated_ts`, total Gold summary rows, and a breakdown by `summary_type`. Use this to verify data freshness.
+| View | Description |
+|------|-------------|
+| `ai_delay_explanations_v` | Gemini-generated delay explanations for each flight event |
+| `ai_route_risk_v` | Route-level risk scores and reasoning |
+| `ai_nl_analytics_facts_v` | Natural-language analytics facts extracted during ingest |
 
 ---
 

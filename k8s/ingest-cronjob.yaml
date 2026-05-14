@@ -34,7 +34,7 @@ spec:
                 - name: BRONZE_BUCKET
                   value: "gcp-lakehouseproject-bronze"
                 - name: NUM_RECORDS
-                  value: "1000"
+                  value: "5000"
                 - name: BAD_DATA_RATE
                   value: "0.02"
                 - name: ENABLE_RAG_DOC_EXPORT
