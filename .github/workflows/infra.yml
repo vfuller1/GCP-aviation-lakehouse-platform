@@ -55,8 +55,25 @@ jobs:
             run.googleapis.com \
             --project=${{ secrets.GCP_PROJECT_ID }}
 
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: ~/.terraform.d/plugin-cache
+          key: ${{ runner.os }}-terraform-providers-${{ hashFiles('backend.tf') }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-providers-
+
       - name: Terraform Init
-        run: terraform init
+        env:
+          TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
+        run: |
+          mkdir -p ~/.terraform.d/plugin-cache
+          # Retry up to 3 times to handle transient registry / GitHub 404s
+          for attempt in 1 2 3; do
+            terraform init && break
+            echo "terraform init attempt ${attempt} failed; retrying in 15s..."
+            sleep 15
+          done
 
       - name: Terraform Plan
         run: terraform plan -lock-timeout=15m -input=false

@@ -9,7 +9,9 @@ terraform {
 
     databricks = {
       source  = "databricks/databricks"
-      version = "~> 1.40"
+      # Pinned below v1.112.0 whose GitHub checksum file returns 404.
+      # Update the upper bound once the registry issue is resolved.
+      version = ">= 1.40.0, < 1.112.0"
     }
   }
 
