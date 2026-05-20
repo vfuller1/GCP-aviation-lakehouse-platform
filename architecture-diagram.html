@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GCP Aviation Lakehouse Platform — Architecture</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #ffffff; color: #1a1a2e; margin: 0; padding: 20px; }
+  h1 { text-align: center; color: #1a73e8; font-size: 22px; margin-bottom: 4px; }
+  h2 { text-align: center; color: #5f6368; font-size: 13px; font-weight: normal; margin-bottom: 30px; }
+  .diagram { display: flex; flex-direction: column; gap: 16px; max-width: 1200px; margin: 0 auto; }
+
+  /* Row layouts */
+  .row { display: flex; align-items: center; justify-content: center; gap: 0; }
+  .row-label { font-size: 11px; color: #5f6368; text-transform: uppercase; letter-spacing: 1px; writing-mode: vertical-rl; transform: rotate(180deg); margin-right: 12px; min-width: 20px; }
+
+  /* Boxes */
+  .box { border-radius: 10px; padding: 12px 16px; text-align: center; min-width: 130px; position: relative; }
+  .box .icon { font-size: 24px; display: block; margin-bottom: 4px; }
+  .box .title { font-size: 12px; font-weight: bold; }
+  .box .sub { font-size: 10px; color: #5f6368; margin-top: 2px; }
+  .box .tag { font-size: 9px; background: rgba(0,0,0,0.07); border-radius: 4px; padding: 1px 5px; margin-top: 4px; display: inline-block; }
+
+  /* Colors by layer */
+  .bronze  { background: #fff4e5; border: 2px solid #cd7f32; }
+  .silver  { background: #f0f2f8; border: 2px solid #7a8fa8; }
+  .gold    { background: #fffde7; border: 2px solid #f9a825; }
+  .ai      { background: #e8f0fe; border: 2px solid #1a73e8; }
+  .infra   { background: #f3e8ff; border: 2px solid #8b5cf6; }
+  .cicd    { background: #e8f5e9; border: 2px solid #22c55e; }
+  .serving { background: #fde8ec; border: 2px solid #f43f5e; }
+
+  /* Arrows */
+  .arrow { font-size: 22px; color: #9aa0a6; margin: 0 4px; align-self: center; }
+  .arrow-down { text-align: center; font-size: 22px; color: #9aa0a6; margin: -6px 0; }
+
+  /* Section dividers */
+  .section-title { text-align: center; font-size: 11px; color: #5f6368; text-transform: uppercase; letter-spacing: 2px; padding: 4px 0; border-top: 1px solid #dadce0; margin-top: 4px; }
+
+  /* Legend */
+  .legend { display: flex; gap: 16px; justify-content: center; margin-top: 24px; flex-wrap: wrap; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+  .legend-dot { width: 12px; height: 12px; border-radius: 3px; border: 2px solid; }
+
+  /* Flow lines */
+  .flow { display: flex; align-items: center; justify-content: center; gap: 0; }
+  .connector { height: 2px; width: 40px; background: linear-gradient(to right, #bdc1c6, #9aa0a6); }
+
+  .gigantic { font-size: 11px; }
+</style>
+</head>
+<body>
+
+<h1>☁️ GCP Aviation Lakehouse Platform</h1>
+<h2>Medallion Architecture · RAG · GitOps CI/CD · Vertex AI</h2>
+
+<div class="diagram">
+
+  <!-- CI/CD Row -->
+  <div class="section-title">⚙️ CI/CD — GitOps (GitHub Actions)</div>
+  <div class="row">
+    <div class="box cicd">
+      <span class="icon">🐙</span>
+      <div class="title">GitHub</div>
+      <div class="sub">git push → main</div>
+      <span class="tag">trigger</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box cicd">
+      <span class="icon">🏗️</span>
+      <div class="title">infra.yml</div>
+      <div class="sub">Terraform Apply</div>
+      <span class="tag">*.tf changes</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box cicd">
+      <span class="icon">🚀</span>
+      <div class="title">pipeline.yml</div>
+      <div class="sub">Build · Push · Deploy</div>
+      <span class="tag">pipeline/** changes</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box infra">
+      <span class="icon">📦</span>
+      <div class="title">Artifact Registry</div>
+      <div class="sub">ingest:SHA</div>
+      <div class="sub">retrieval:SHA</div>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓</div>
+
+  <!-- Bronze Layer -->
+  <div class="section-title">🥉 Bronze — Raw Ingestion</div>
+  <div class="row">
+    <div class="box bronze">
+      <span class="icon">⏱️</span>
+      <div class="title">GKE Autopilot</div>
+      <div class="sub">aviation-ingest CronJob</div>
+      <span class="tag">daily · 1000 records</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box bronze">
+      <span class="icon">✈️</span>
+      <div class="title">Synthetic Generator</div>
+      <div class="sub">10 airlines · 20 airports</div>
+      <div class="sub">delays · weather · status</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box bronze">
+      <span class="icon">🪣</span>
+      <div class="title">GCS Bronze</div>
+      <div class="sub">{project}-bronze</div>
+      <div class="sub">aviation/raw/date=*/</div>
+      <span class="tag">CSV · ~2% bad rows</span>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓</div>
+
+  <!-- Silver Layer -->
+  <div class="section-title">🥈 Silver — Cleansed Data</div>
+  <div class="row">
+    <div class="box silver">
+      <span class="icon">🔷</span>
+      <div class="title">Databricks</div>
+      <div class="sub">bronze_to_silver.py</div>
+      <span class="tag">Drop nulls · Validate</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box silver">
+      <span class="icon">🪣</span>
+      <div class="title">GCS Silver</div>
+      <div class="sub">{project}-silver</div>
+      <div class="sub">aviation/cleaned/</div>
+      <span class="tag">Parquet · partitioned</span>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓</div>
+
+  <!-- Gold Layer -->
+  <div class="section-title">🥇 Gold — Aggregated Analytics</div>
+  <div class="row">
+    <div class="box gold">
+      <span class="icon">🔷</span>
+      <div class="title">Databricks</div>
+      <div class="sub">silver_to_gold.py</div>
+      <span class="tag">Aggregate · Route risk</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box gold">
+      <span class="icon">🪣</span>
+      <div class="title">GCS Gold</div>
+      <div class="sub">{project}-gold</div>
+      <div class="sub">aviation/aggregated/</div>
+      <span class="tag">Parquet · route stats</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box gold">
+      <span class="icon">🔷</span>
+      <div class="title">Databricks Export</div>
+      <div class="sub">export_tables_to_gcs.py</div>
+      <span class="tag">BigQuery external tables</span>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓</div>
+
+  <!-- AI Layer -->
+  <div class="section-title">🤖 AI Layer — Embeddings & Vector Storage</div>
+  <div class="row">
+    <div class="box ai">
+      <span class="icon">🧠</span>
+      <div class="title">text-embedding-005</div>
+      <div class="sub">Vertex AI</div>
+      <div class="sub">768-dim vectors</div>
+      <span class="tag">batch=5 · retry backoff</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box ai">
+      <span class="icon">📊</span>
+      <div class="title">BigQuery</div>
+      <div class="sub">ai_rag_documents</div>
+      <div class="sub">17,000+ rows</div>
+      <span class="tag">content + embedding</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box ai">
+      <span class="icon">🔍</span>
+      <div class="title">Vector Search</div>
+      <div class="sub">Matching Engine</div>
+      <div class="sub">BATCH_UPDATE · ScaNN</div>
+      <span class="tag">PATCH LRO trigger</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box ai">
+      <span class="icon">🪣</span>
+      <div class="title">GCS AI</div>
+      <div class="sub">{project}-ai</div>
+      <div class="sub">indices/rag/batch.json</div>
+      <span class="tag">NDJSON vectors</span>
+    </div>
+  </div>
+
+  <div class="arrow-down">↓</div>
+
+  <!-- Serving Layer -->
+  <div class="section-title">🌐 Serving — RAG Retrieval API</div>
+  <div class="row">
+    <div class="box serving">
+      <span class="icon">👤</span>
+      <div class="title">User / App</div>
+      <div class="sub">POST /retrieve</div>
+      <div class="sub">question + filters</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box serving">
+      <span class="icon">☁️</span>
+      <div class="title">Cloud Run</div>
+      <div class="sub">aviation-retrieval</div>
+      <div class="sub">Flask · gunicorn</div>
+      <span class="tag">public · allUsers</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box ai">
+      <span class="icon">📊</span>
+      <div class="title">BigQuery</div>
+      <div class="sub">facts_count = 10</div>
+      <div class="sub">filter by airline/date</div>
+      <span class="tag">deterministic facts</span>
+    </div>
+    <div class="arrow">+</div>
+    <div class="box ai">
+      <span class="icon">🔍</span>
+      <div class="title">Vector Search</div>
+      <div class="sub">context_count</div>
+      <div class="sub">semantic similarity</div>
+      <span class="tag">ANN k-nearest</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box serving">
+      <span class="icon">✨</span>
+      <div class="title">Gemini 2.5-flash</div>
+      <div class="sub">Grounded reasoning</div>
+      <div class="sub">No hallucination</div>
+      <span class="tag">facts-only context</span>
+    </div>
+    <div class="arrow">→</div>
+    <div class="box serving">
+      <span class="icon">💬</span>
+      <div class="title">Answer</div>
+      <div class="sub">facts_count: 10</div>
+      <div class="sub">grounded · cited</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Legend -->
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="border-color:#cd7f32;background:#fff4e5"></div> Bronze Layer</div>
+  <div class="legend-item"><div class="legend-dot" style="border-color:#7a8fa8;background:#f0f2f8"></div> Silver Layer</div>
+  <div class="legend-item"><div class="legend-dot" style="border-color:#f9a825;background:#fffde7"></div> Gold Layer</div>
+  <div class="legend-item"><div class="legend-dot" style="border-color:#1a73e8;background:#e8f0fe"></div> AI / Vertex AI</div>
+  <div class="legend-item"><div class="legend-dot" style="border-color:#f43f5e;background:#fde8ec"></div> Serving / Cloud Run</div>
+  <div class="legend-item"><div class="legend-dot" style="border-color:#22c55e;background:#e8f5e9"></div> CI/CD / GitHub Actions</div>
+  <div class="legend-item"><div class="legend-dot" style="border-color:#8b5cf6;background:#f3e8ff"></div> Infrastructure / Terraform</div>
+</div>
+
+<p style="text-align:center;font-size:10px;color:#444;margin-top:20px;">
+  GCP Aviation Lakehouse Platform · Terraform v1.6.6 · hashicorp/google ~>7.23 · Vertex AI SDK 1.71.1
+</p>
+
+</body>
+</html>

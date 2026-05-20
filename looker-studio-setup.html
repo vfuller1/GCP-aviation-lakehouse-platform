@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Looker Studio Setup — GCP Aviation Lakehouse</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f8f9fa; margin: 0; padding: 30px 40px; color: #1a1a2e; max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 20pt; color: #1a73e8; border-bottom: 3px solid #1a73e8; padding-bottom: 8px; }
+  .subtitle { font-size: 10pt; color: #5f6368; margin-bottom: 28px; }
+  h2 { font-size: 13pt; color: #1a73e8; margin-top: 32px; }
+  h3 { font-size: 11pt; color: #202124; margin-bottom: 6px; }
+  .step-box { background: #fff; border-radius: 8px; padding: 20px 24px; margin-bottom: 18px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); border-left: 4px solid #1a73e8; }
+  .step-num { display: inline-block; background: #1a73e8; color: #fff; border-radius: 50%; width: 24px; height: 24px; line-height: 24px; text-align: center; font-size: 12px; font-weight: bold; margin-right: 8px; }
+  .btn { display: inline-block; background: #1a73e8; color: #fff; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-size: 11pt; font-weight: 600; margin: 6px 6px 6px 0; transition: background 0.2s; }
+  .btn:hover { background: #1557b0; }
+  .btn-outline { background: #fff; color: #1a73e8; border: 2px solid #1a73e8; }
+  .btn-outline:hover { background: #e8f0fe; }
+  .btn-green { background: #137333; }
+  .btn-green:hover { background: #0d5c28; }
+  .ds-card { background: #fff; border-radius: 8px; padding: 16px 20px; margin-bottom: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+  .ds-card .info h3 { margin: 0 0 2px 0; font-size: 11pt; }
+  .ds-card .info p { margin: 0; font-size: 9.5pt; color: #5f6368; }
+  .ds-card .badge { font-size: 8.5pt; background: #d2e3fc; color: #1557b0; padding: 2px 8px; border-radius: 12px; font-weight: 600; }
+  .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
+  .chart-card { background: #fff; border-radius: 8px; padding: 14px 16px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
+  .chart-card .chart-type { font-size: 8.5pt; background: #e8f5e9; color: #137333; padding: 2px 8px; border-radius: 12px; font-weight: 600; display: inline-block; margin-bottom: 6px; }
+  .chart-card h4 { margin: 4px 0 4px 0; font-size: 10.5pt; }
+  .chart-card p { margin: 0; font-size: 9pt; color: #5f6368; }
+  code { background: #f1f3f4; padding: 2px 6px; border-radius: 4px; font-size: 9.5pt; font-family: 'Cascadia Code', Consolas, monospace; }
+  .tip { background: #e8f0fe; border-left: 4px solid #1a73e8; padding: 10px 14px; border-radius: 4px; font-size: 9.5pt; margin-top: 10px; }
+  .warning { background: #fef3cd; border-left: 4px solid #f9a825; padding: 10px 14px; border-radius: 4px; font-size: 9.5pt; margin-top: 10px; }
+  .footer { margin-top: 40px; border-top: 1px solid #e0e0e0; padding-top: 10px; font-size: 9pt; color: #9aa0a6; text-align: center; }
+  table { width: 100%; border-collapse: collapse; font-size: 9.5pt; margin-top: 8px; }
+  th { background: #e8f0fe; color: #1557b0; padding: 7px 10px; text-align: left; }
+  td { padding: 6px 10px; border-bottom: 1px solid #e0e0e0; }
+  tr:nth-child(even) { background: #f8f9fa; }
+</style>
+</head>
+<body>
+
+<h1>📊 Looker Studio Dashboard Setup</h1>
+<div class="subtitle">GCP Aviation Lakehouse Platform &nbsp;·&nbsp; Project: <strong>gcp-lakehouseproject</strong> &nbsp;·&nbsp; Dataset: <strong>aviation_analytics</strong></div>
+
+<!-- STEP 1 -->
+<h2>Step 1 — Open Looker Studio</h2>
+<div class="step-box">
+  <p><span class="step-num">1</span> Click the button below to open Looker Studio, then sign in with your Google account (same account that owns the GCP project).</p>
+  <a class="btn" href="https://lookerstudio.google.com" target="_blank">Open Looker Studio →</a>
+  <a class="btn btn-outline" href="https://lookerstudio.google.com/reporting/create" target="_blank">+ Create Blank Report</a>
+</div>
+
+<!-- STEP 2 -->
+<h2>Step 2 — Add Data Sources (one per view)</h2>
+<p>Click each link below to open the BigQuery connector pre-filled for that view. After adding the first source, add others via <strong>Resource → Manage added data sources → Add a data source</strong>.</p>
+
+<div class="ds-card">
+  <div class="info">
+    <h3>✈️ Airline Performance</h3>
+    <p>View: <code>bi_airline_performance_v</code> &nbsp;·&nbsp; Per-airline delay rates and on-time statistics</p>
+  </div>
+  <div>
+    <span class="badge">BI View</span><br><br>
+    <a class="btn btn-outline" style="font-size:9.5pt;padding:6px 14px;" href="https://lookerstudio.google.com/datasources/create?connectorId=2&projectId=gcp-lakehouseproject&datasetId=aviation_analytics&tableId=bi_airline_performance_v" target="_blank">Connect →</a>
+  </div>
+</div>
+
+<div class="ds-card">
+  <div class="info">
+    <h3>🗺️ Route Performance</h3>
+    <p>View: <code>bi_route_performance_v</code> &nbsp;·&nbsp; Route-level delay statistics and disruption rates</p>
+  </div>
+  <div>
+    <span class="badge">BI View</span><br><br>
+    <a class="btn btn-outline" style="font-size:9.5pt;padding:6px 14px;" href="https://lookerstudio.google.com/datasources/create?connectorId=2&projectId=gcp-lakehouseproject&datasetId=aviation_analytics&tableId=bi_route_performance_v" target="_blank">Connect →</a>
+  </div>
+</div>
+
+<div class="ds-card">
+  <div class="info">
+    <h3>📅 Daily Delays Trend</h3>
+    <p>View: <code>bi_daily_delays_v</code> &nbsp;·&nbsp; Day-by-day delay trends for time series charts</p>
+  </div>
+  <div>
+    <span class="badge">BI View</span><br><br>
+    <a class="btn btn-outline" style="font-size:9.5pt;padding:6px 14px;" href="https://lookerstudio.google.com/datasources/create?connectorId=2&projectId=gcp-lakehouseproject&datasetId=aviation_analytics&tableId=bi_daily_delays_v" target="_blank">Connect →</a>
+  </div>
+</div>
+
+<div class="ds-card">
+  <div class="info">
+    <h3>🔄 Pipeline Health</h3>
+    <p>View: <code>bi_pipeline_refresh_v</code> &nbsp;·&nbsp; Data freshness and pipeline status</p>
+  </div>
+  <div>
+    <span class="badge">BI View</span><br><br>
+    <a class="btn btn-outline" style="font-size:9.5pt;padding:6px 14px;" href="https://lookerstudio.google.com/datasources/create?connectorId=2&projectId=gcp-lakehouseproject&datasetId=aviation_analytics&tableId=bi_pipeline_refresh_v" target="_blank">Connect →</a>
+  </div>
+</div>
+
+<!-- STEP 3 -->
+<h2>Step 3 — Build the Charts</h2>
+<p>Add the following charts to your report. Use <strong>Insert → Chart</strong> for each one.</p>
+
+<div class="chart-grid">
+  <div class="chart-card">
+    <span class="chart-type">Scorecard ×3</span>
+    <h4>KPI Banner</h4>
+    <p>Data source: <code>bi_airline_performance_v</code><br>
+    Metrics: <code>SUM(total_flights)</code>, <code>AVG(avg_delay_min)</code>, <code>AVG(delayed_pct)</code></p>
+  </div>
+  <div class="chart-card">
+    <span class="chart-type">Bar Chart</span>
+    <h4>Delay by Airline</h4>
+    <p>Data source: <code>bi_airline_performance_v</code><br>
+    Dimension: <code>airline</code> &nbsp; Metric: <code>avg_delay_min</code><br>
+    Sort: descending by avg_delay_min</p>
+  </div>
+  <div class="chart-card">
+    <span class="chart-type">Time Series</span>
+    <h4>Daily Delay Trend</h4>
+    <p>Data source: <code>bi_daily_delays_v</code><br>
+    Dimension: <code>flight_date</code> &nbsp; Metric: <code>avg_delay_min</code></p>
+  </div>
+  <div class="chart-card">
+    <span class="chart-type">Table</span>
+    <h4>Route Performance Table</h4>
+    <p>Data source: <code>bi_route_performance_v</code><br>
+    Dimensions: <code>route</code> &nbsp; Metrics: <code>total_flights</code>, <code>avg_delay_min</code>, <code>delayed_pct</code>, <code>weather_impact_pct</code></p>
+  </div>
+  <div class="chart-card">
+    <span class="chart-type">Pie / Donut</span>
+    <h4>Weather vs Non-Weather Delays</h4>
+    <p>Data source: <code>bi_airline_performance_v</code><br>
+    Dimension: <code>airline</code> &nbsp; Metric: <code>weather_impact_pct</code></p>
+  </div>
+  <div class="chart-card">
+    <span class="chart-type">Scorecard</span>
+    <h4>Pipeline Freshness</h4>
+    <p>Data source: <code>bi_pipeline_refresh_v</code><br>
+    Metric: <code>generated_ts</code> (latest refresh timestamp)</p>
+  </div>
+</div>
+
+<!-- STEP 4 -->
+<h2>Step 4 — Add a Date Range Filter</h2>
+<div class="step-box">
+  <p><span class="step-num">4</span> Go to <strong>Insert → Date range control</strong> and set the default range to <strong>Last 30 days</strong>. Apply it to all charts using <code>bi_daily_delays_v</code>.</p>
+  <div class="tip">💡 Tip: Hold Shift and click multiple charts to apply a single date control to all of them at once via <strong>Set date range</strong>.</div>
+</div>
+
+<!-- STEP 5 -->
+<h2>Step 5 — Share the Report</h2>
+<div class="step-box">
+  <p><span class="step-num">5</span> Click <strong>Share</strong> in the top right → set to <em>"Anyone with the link can view"</em> → copy the URL. The report auto-refreshes from BigQuery on each open.</p>
+  <div class="warning">⚠️ Make sure the viewer's Google account has <code>roles/bigquery.dataViewer</code> on the <code>aviation_analytics</code> dataset, or set the data source to use owner credentials.</div>
+</div>
+
+<!-- BigQuery view reference -->
+<h2>BigQuery View Field Reference</h2>
+<table>
+  <tr><th>View</th><th>Key Fields</th></tr>
+  <tr><td><code>bi_airline_performance_v</code></td><td>airline, total_flights, avg_delay_min, delayed_pct, weather_impact_pct, on_time_pct</td></tr>
+  <tr><td><code>bi_route_performance_v</code></td><td>route, origin, destination, total_flights, avg_delay_min, delayed_pct, weather_impact_pct</td></tr>
+  <tr><td><code>bi_daily_delays_v</code></td><td>flight_date, total_flights, avg_delay_min, delayed_pct, weather_affected_pct</td></tr>
+  <tr><td><code>bi_pipeline_refresh_v</code></td><td>generated_ts, total_gold_rows, summary_type</td></tr>
+</table>
+
+<div class="footer">
+  GCP Aviation Lakehouse Platform &nbsp;·&nbsp; Looker Studio connects directly to BigQuery — no data is copied or exported
+</div>
+
+</body>
+</html>

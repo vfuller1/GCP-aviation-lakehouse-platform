@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GCP Aviation Lakehouse — Architecture Flow</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f8f9fa; margin: 0; padding: 30px 40px; color: #1a1a2e; }
+  h1 { font-size: 20pt; color: #1a73e8; border-bottom: 3px solid #1a73e8; padding-bottom: 8px; }
+  .subtitle { font-size: 10pt; color: #5f6368; margin-bottom: 30px; }
+  .diagram-box { background: #fff; border-radius: 10px; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 9.5pt; }
+  .dot { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<h1>GCP Aviation Lakehouse — Architecture Flow</h1>
+<div class="subtitle">Project: <strong>gcp-lakehouseproject</strong> &nbsp;|&nbsp; Region: <strong>us-central1</strong> &nbsp;|&nbsp; May 13, 2026</div>
+
+<div class="diagram-box">
+<div class="mermaid">
+flowchart TD
+    %% ── Ingest ──────────────────────────────────────────────────────────────
+    GHA["🔄 GitHub Actions\npipeline.yml"]:::cicd
+    GKE["⚙️ GKE Autopilot\nCronJob — 06:00 UTC\naviation-pipeline"]:::gke
+    INGEST["🐍 ingest.py\nGenerates 5,000 synthetic\nflight records"]:::app
+
+    GHA -->|"docker build + push\n+ kubectl apply"| GKE
+    GKE --> INGEST
+
+    %% ── Storage — Medallion ─────────────────────────────────────────────────
+    BRONZE["🪣 GCS Bronze\ngcp-lakehouseproject-bronze\nRaw CSV files"]:::storage
+    SILVER_B["🪣 GCS Silver\ngcp-lakehouseproject-silver\nCleaned Parquet"]:::storage
+    GOLD_B["🪣 GCS Gold\ngcp-lakehouseproject-gold\nAggregated Parquet"]:::storage
+    AI_B["🪣 GCS AI Artifacts\ngcp-lakehouseproject-ai\nEmbeddings & manifests"]:::storage
+
+    INGEST -->|"Write raw CSV"| BRONZE
+
+    %% ── Databricks ──────────────────────────────────────────────────────────
+    DB_BS["🧱 Databricks Job\nbronze_to_silver.py\nClean & validate"]:::databricks
+    DB_SG["🧱 Databricks Job\nsilver_to_gold.py\nAggregate metrics"]:::databricks
+    DB_EX["🧱 Databricks Job\nexport_tables_to_gcs.py\nExport Parquet"]:::databricks
+
+    BRONZE -->|"Read raw"| DB_BS
+    DB_BS -->|"Write cleaned"| SILVER_B
+    SILVER_B --> DB_SG
+    DB_SG -->|"Write aggregated"| GOLD_B
+    GOLD_B --> DB_EX
+    DB_EX -->|"Export Parquet"| SILVER_B
+    DB_EX -->|"Export Parquet"| GOLD_B
+
+    %% ── BigQuery ────────────────────────────────────────────────────────────
+    BQ_DS["📊 BigQuery Dataset\naviation_analytics"]:::bigquery
+    BQ_EXT["📋 External Tables\nsilver_flights_ext\ngold_summary_ext"]:::bigquery
+    BQ_BI["📈 BI Views\nairline_performance\nroute_performance\ndaily_delays"]:::bigquery
+    BQ_RAG["📄 ai_rag_documents\nNative table\n— primary RAG source"]:::bigquery
+    BQ_AI["🧠 AI Views\nai_route_risk_v\nai_delay_explanations_v\nai_nl_analytics_facts_v"]:::bigquery
+
+    SILVER_B -->|"GCS-backed\nexternal table"| BQ_EXT
+    GOLD_B   -->|"GCS-backed\nexternal table"| BQ_EXT
+    BQ_EXT --> BQ_DS
+    BQ_DS --> BQ_BI
+    BQ_DS --> BQ_RAG
+    BQ_DS --> BQ_AI
+
+    INGEST -->|"Write RAG docs\n(if ENABLE_RAG_DOC_EXPORT)"| BQ_RAG
+
+    %% ── Vertex AI Embeddings ────────────────────────────────────────────────
+    EMBED["🔢 Vertex AI\ntext-embedding-005\nGenerate vectors"]:::vertex
+    VS_IDX["🗂️ Vector Search Index\naviation-rag"]:::vertex
+    VS_EP["🔌 Index Endpoint\naviation-rag\n(public)"]:::vertex
+
+    BQ_RAG -->|"RAG documents"| EMBED
+    INGEST -->|"Embed flight records\n(if ENABLE_VERTEX_EMBEDDINGS)"| EMBED
+    EMBED -->|"Store vectors"| VS_IDX
+    VS_IDX -->|"Deploy"| VS_EP
+
+    %% ── Cloud Run Retrieval Service ─────────────────────────────────────────
+    AR["📦 Artifact Registry\naviation-pipeline\nDocker"]:::gke
+    CR["🚀 Cloud Run\naviation-retrieval\nFlask service"]:::cloudrun
+    GEMINI["✨ Gemini 2.5 Flash\nVertex AI Reasoning\nGrounded answer"]:::vertex
+    FS["🗄️ Firestore\nrag-sessions\nSession memory"]:::firestore
+
+    GHA -->|"docker push\nretrieval image"| AR
+    AR -->|"Deploy image"| CR
+
+    USER["👤 User / Client\nPOST /retrieve\n{question, session_id}"]:::user
+
+    USER -->|"HTTP request"| CR
+    CR -->|"1. Load history"| FS
+    FS -->|"Return turns"| CR
+    CR -->|"2. Embed query"| EMBED
+    VS_EP -->|"3. Top-K docs"| CR
+    CR -->|"3. Vector search"| VS_EP
+    CR -->|"4. Query facts"| BQ_AI
+    BQ_AI -->|"Return rows"| CR
+    CR -->|"5. Build prompt\n+ history + docs + facts"| GEMINI
+    GEMINI -->|"Grounded answer"| CR
+    CR -->|"6. Save turn"| FS
+    CR -->|"Answer + sources"| USER
+
+    %% ── Terraform / Infra CI ────────────────────────────────────────────────
+    INFRA["🏗️ GitHub Actions\ninfra.yml\nterraform apply"]:::cicd
+    INFRA -.->|"Provisions"| BRONZE
+    INFRA -.->|"Provisions"| BQ_DS
+    INFRA -.->|"Provisions"| GKE
+    INFRA -.->|"Provisions"| VS_IDX
+    INFRA -.->|"Provisions"| CR
+    INFRA -.->|"Provisions"| FS
+
+    %% ── Styles ──────────────────────────────────────────────────────────────
+    classDef storage   fill:#fce8b2,stroke:#b06000,color:#1a1a2e
+    classDef bigquery  fill:#d2e3fc,stroke:#1557b0,color:#1a1a2e
+    classDef gke       fill:#ceead6,stroke:#137333,color:#1a1a2e
+    classDef vertex    fill:#e8d5f5,stroke:#6a1b9a,color:#1a1a2e
+    classDef cloudrun  fill:#fde7e7,stroke:#c5221f,color:#1a1a2e
+    classDef firestore fill:#fef3cd,stroke:#b45309,color:#1a1a2e
+    classDef databricks fill:#ff6b35,stroke:#c94a1a,color:#fff
+    classDef cicd      fill:#e2e3e5,stroke:#3c4043,color:#1a1a2e
+    classDef app       fill:#e8f5e9,stroke:#2e7d32,color:#1a1a2e
+    classDef user      fill:#1a73e8,stroke:#0d47a1,color:#fff
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="dot" style="background:#fce8b2;border:1px solid #b06000"></div> Cloud Storage</div>
+  <div class="legend-item"><div class="dot" style="background:#d2e3fc;border:1px solid #1557b0"></div> BigQuery</div>
+  <div class="legend-item"><div class="dot" style="background:#ceead6;border:1px solid #137333"></div> GKE / Artifact Registry</div>
+  <div class="legend-item"><div class="dot" style="background:#e8d5f5;border:1px solid #6a1b9a"></div> Vertex AI</div>
+  <div class="legend-item"><div class="dot" style="background:#fde7e7;border:1px solid #c5221f"></div> Cloud Run</div>
+  <div class="legend-item"><div class="dot" style="background:#fef3cd;border:1px solid #b45309"></div> Firestore</div>
+  <div class="legend-item"><div class="dot" style="background:#ff6b35;border:1px solid #c94a1a"></div> Databricks</div>
+  <div class="legend-item"><div class="dot" style="background:#e2e3e5;border:1px solid #3c4043"></div> CI/CD (GitHub Actions)</div>
+  <div class="legend-item"><div class="dot" style="background:#1a73e8;border:1px solid #0d47a1"></div> User / Client</div>
+</div>
+</div>
+
+<script>mermaid.initialize({ startOnLoad: true, theme: 'default', flowchart: { curve: 'basis', padding: 20 } });</script>
+</body>
+</html>

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GCP Aviation Lakehouse — CI/CD Terraform Flow</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; background: #f8f9fa; margin: 0; padding: 30px 40px; color: #1a1a2e; }
+  h1 { font-size: 20pt; color: #1a73e8; border-bottom: 3px solid #1a73e8; padding-bottom: 8px; }
+  .subtitle { font-size: 10pt; color: #5f6368; margin-bottom: 30px; }
+  .diagram-box { background: #fff; border-radius: 10px; padding: 30px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 30px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 9.5pt; }
+  .dot { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+  h2 { font-size: 13pt; color: #3c4043; margin-top: 0; margin-bottom: 18px; }
+</style>
+</head>
+<body>
+
+<h1>GCP Aviation Lakehouse — CI/CD &amp; Terraform Feature Flag Flow</h1>
+<div class="subtitle">Project: <strong>gcp-lakehouseproject</strong> &nbsp;|&nbsp; Workflow: <strong>infra.yml</strong> &nbsp;|&nbsp; May 19, 2026</div>
+
+<!-- ── Diagram 1: CI/CD Trigger Flow ──────────────────────────────────── -->
+<div class="diagram-box">
+<h2>1 · How a Code Change Triggers Deployment</h2>
+<div class="mermaid">
+flowchart LR
+    DEV["👨‍💻 Developer\nlocal machine"]:::dev
+    GIT["📁 Git Push\nto main branch\n*.tf file changed"]:::git
+    GHA["⚙️ GitHub Actions\ninfra.yml triggers\nautomatically"]:::cicd
+    AUTH["🔐 GCP Auth\nService Account Key\nfrom GitHub Secret"]:::auth
+    INIT["🔄 terraform init\nDownloads providers\nConnects to GCS state"]:::tf
+    PLAN["📋 terraform plan\nShows what will\nchange (dry run)"]:::tf
+    APPLY["✅ terraform apply\nMakes real changes\nin GCP"]:::tf
+    GCP["☁️ Google Cloud\ngcp-lakehouseproject"]:::gcp
+
+    DEV -->|"git push origin main"| GIT
+    GIT -->|"path filter:\n**.tf matched"| GHA
+    GHA --> AUTH
+    AUTH --> INIT
+    INIT --> PLAN
+    PLAN --> APPLY
+    APPLY -->|"creates / updates\n/ destroys resources"| GCP
+
+    classDef dev     fill:#e8f0fe,stroke:#4285f4,color:#1a1a2e
+    classDef git     fill:#fce8b2,stroke:#f9a825,color:#1a1a2e
+    classDef cicd    fill:#e6f4ea,stroke:#34a853,color:#1a1a2e
+    classDef auth    fill:#fce8b2,stroke:#f9a825,color:#1a1a2e
+    classDef tf      fill:#ede7f6,stroke:#7b1fa2,color:#1a1a2e
+    classDef gcp     fill:#e8f0fe,stroke:#1a73e8,color:#1a1a2e
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="dot" style="background:#4285f4"></div> Developer / Git</div>
+  <div class="legend-item"><div class="dot" style="background:#34a853"></div> GitHub Actions CI/CD</div>
+  <div class="legend-item"><div class="dot" style="background:#7b1fa2"></div> Terraform steps</div>
+  <div class="legend-item"><div class="dot" style="background:#1a73e8"></div> Google Cloud</div>
+</div>
+</div>
+
+<!-- ── Diagram 2: Feature Flag Logic ──────────────────────────────────── -->
+<div class="diagram-box">
+<h2>2 · Feature Flag Evaluation (count = var.flag ? 1 : 0)</h2>
+<div class="mermaid">
+flowchart TD
+    APPLY["✅ terraform apply\nreads feature flags\nfrom CI environment"]:::tf
+
+    APPLY --> FG{{"enable_gke\n= true ✔"}}:::flag
+    APPLY --> FV{{"enable_vertex_ai\n= true ✔"}}:::flag
+    APPLY --> FD{{"enable_databricks\n= false ✘"}}:::flag
+    APPLY --> FS[/"Security resources\nalways on"/]:::always
+
+    FG -->|"count = 1\nCREATED"| GKE["⚙️ GKE Autopilot cluster\nArtifact Registry\nPipeline Service Account\nWorkload Identity binding"]:::created
+    FG -->|"count = 0\nSKIPPED"| GKESKIP["(no GKE resources)"]:::skipped
+
+    FV -->|"count = 1\nCREATED"| VAI["🤖 Vertex AI APIs\nEmbedding pipeline SA\nAI Artifacts bucket\nVector Search index"]:::created
+    FV -->|"count = 0\nSKIPPED"| VAISKIP["(no Vertex AI resources)"]:::skipped
+
+    FD -->|"count = 1\nCREATED"| DBR["🔷 Databricks workspace\nMetastore & cluster"]:::created
+    FD -->|"count = 0 ← default\nSKIPPED"| DBRSKIP["(no Databricks resources)\n← current state"]:::skipped
+
+    FS --> SEC["🛡️ Cloud Armor WAF policy\nIAM Audit Logs (BQ + GCS)\nCompute API enabled"]:::always
+
+    classDef tf      fill:#ede7f6,stroke:#7b1fa2,color:#1a1a2e
+    classDef flag    fill:#fff8e1,stroke:#f9a825,color:#1a1a2e
+    classDef created fill:#e6f4ea,stroke:#34a853,color:#1a1a2e
+    classDef skipped fill:#f1f3f4,stroke:#bdc1c6,color:#80868b,stroke-dasharray:4
+    classDef always  fill:#e8f0fe,stroke:#1a73e8,color:#1a1a2e
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="dot" style="background:#34a853"></div> Resource created (count = 1)</div>
+  <div class="legend-item"><div class="dot" style="background:#bdc1c6"></div> Resource skipped / not billed (count = 0)</div>
+  <div class="legend-item"><div class="dot" style="background:#1a73e8"></div> Always-on (no flag)</div>
+  <div class="legend-item"><div class="dot" style="background:#f9a825"></div> Feature flag decision point</div>
+</div>
+</div>
+
+<!-- ── Diagram 3: State File Lifecycle ────────────────────────────────── -->
+<div class="diagram-box">
+<h2>3 · Terraform State Lifecycle</h2>
+<div class="mermaid">
+flowchart LR
+    STATE["🗄️ GCS State File\ngcp-lakehouseproject-tfstate\nterraform/state"]:::storage
+
+    subgraph CYCLE ["Each terraform apply run"]
+      direction TB
+      READ["Read current state\n(what exists in GCP)"]:::tf
+      DIFF["Diff against\nnew .tf code"]:::tf
+      ACT["Apply only the\ndelta changes"]:::tf
+      WRITE["Write updated\nstate back to GCS"]:::tf
+      READ --> DIFF --> ACT --> WRITE
+    end
+
+    STATE -->|"locked during run"| READ
+    WRITE -->|"unlock + save"| STATE
+
+    subgraph OUTCOMES ["Possible outcomes per resource"]
+      direction LR
+      CREATE["+ Create\nnew resource"]:::created
+      UPDATE["~ Update\nconfig change"]:::update
+      DESTROY["- Destroy\nflag = false\nor removed"]:::destroy
+      NOOP["No-op\nno changes"]:::noop
+    end
+
+    ACT --> CREATE
+    ACT --> UPDATE
+    ACT --> DESTROY
+    ACT --> NOOP
+
+    classDef storage fill:#e8f0fe,stroke:#1a73e8,color:#1a1a2e
+    classDef tf      fill:#ede7f6,stroke:#7b1fa2,color:#1a1a2e
+    classDef created fill:#e6f4ea,stroke:#34a853,color:#1a1a2e
+    classDef update  fill:#fff8e1,stroke:#f9a825,color:#1a1a2e
+    classDef destroy fill:#fce8e6,stroke:#ea4335,color:#1a1a2e
+    classDef noop    fill:#f1f3f4,stroke:#bdc1c6,color:#80868b
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="dot" style="background:#34a853"></div> Create</div>
+  <div class="legend-item"><div class="dot" style="background:#f9a825"></div> Update</div>
+  <div class="legend-item"><div class="dot" style="background:#ea4335"></div> Destroy</div>
+  <div class="legend-item"><div class="dot" style="background:#bdc1c6"></div> No-op</div>
+  <div class="legend-item"><div class="dot" style="background:#1a73e8"></div> GCS state backend</div>
+</div>
+</div>
+
+<script>mermaid.initialize({ startOnLoad: true, theme: 'default', flowchart: { curve: 'basis' } });</script>
+</body>
+</html>

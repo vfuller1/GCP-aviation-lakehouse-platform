@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GCP Aviation Lakehouse — Resource Inventory</title>
+<style>
+  @page { margin: 30mm 20mm; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; color: #1a1a2e; margin: 0; padding: 20px 40px; }
+  h1 { font-size: 20pt; color: #1a73e8; border-bottom: 3px solid #1a73e8; padding-bottom: 8px; margin-bottom: 4px; }
+  .subtitle { font-size: 10pt; color: #5f6368; margin-bottom: 30px; }
+  h2 { font-size: 13pt; color: #ffffff; background: #1a73e8; padding: 6px 12px; border-radius: 4px; margin-top: 28px; margin-bottom: 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 0; font-size: 10pt; }
+  thead tr { background: #e8f0fe; }
+  thead th { padding: 7px 10px; text-align: left; font-weight: 600; color: #1a73e8; border-bottom: 2px solid #1a73e8; }
+  tbody tr:nth-child(odd)  { background: #f8f9fa; }
+  tbody tr:nth-child(even) { background: #ffffff; }
+  tbody td { padding: 6px 10px; border-bottom: 1px solid #e0e0e0; vertical-align: top; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 8.5pt; font-weight: 600; white-space: nowrap; }
+  .badge-storage   { background: #fce8b2; color: #b06000; }
+  .badge-bq        { background: #d2e3fc; color: #1557b0; }
+  .badge-gke       { background: #ceead6; color: #137333; }
+  .badge-vertex    { background: #e8d5f5; color: #6a1b9a; }
+  .badge-cloudrun  { background: #fde7e7; color: #c5221f; }
+  .badge-firestore { background: #fef3cd; color: #b45309; }
+  .badge-iam       { background: #e2e3e5; color: #3c4043; }
+  .section-note { font-size: 9pt; color: #5f6368; padding: 4px 10px 8px 10px; font-style: italic; }
+  .footer { margin-top: 40px; border-top: 1px solid #e0e0e0; padding-top: 10px; font-size: 9pt; color: #9aa0a6; text-align: center; }
+  .count-bar { display: flex; gap: 16px; flex-wrap: wrap; margin: 18px 0 28px 0; }
+  .count-chip { background: #f1f3f4; border: 1px solid #dadce0; border-radius: 8px; padding: 8px 16px; text-align: center; }
+  .count-chip .num { font-size: 18pt; font-weight: 700; color: #1a73e8; display: block; }
+  .count-chip .lbl { font-size: 8.5pt; color: #5f6368; }
+</style>
+</head>
+<body>
+
+<h1>GCP Aviation Lakehouse Platform</h1>
+<div class="subtitle">GCP Resource Inventory &nbsp;|&nbsp; Project: <strong>gcp-lakehouseproject</strong> &nbsp;|&nbsp; Region: <strong>us-central1</strong> &nbsp;|&nbsp; Generated: May 13, 2026</div>
+
+<div class="count-bar">
+  <div class="count-chip"><span class="num">4</span><span class="lbl">GCS Buckets</span></div>
+  <div class="count-chip"><span class="num">11</span><span class="lbl">BigQuery Tables/Views</span></div>
+  <div class="count-chip"><span class="num">3</span><span class="lbl">GKE / Registry</span></div>
+  <div class="count-chip"><span class="num">4</span><span class="lbl">Vertex AI</span></div>
+  <div class="count-chip"><span class="num">2</span><span class="lbl">Cloud Run</span></div>
+  <div class="count-chip"><span class="num">2</span><span class="lbl">Firestore</span></div>
+  <div class="count-chip"><span class="num">1</span><span class="lbl">State Bucket</span></div>
+</div>
+
+<!-- Cloud Storage -->
+<h2>☁️ Cloud Storage</h2>
+<div class="section-note">Defined in storage.tf</div>
+<table>
+  <thead><tr><th>Resource Type</th><th>Name / ID</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-storage">GCS Bucket</span></td><td>gcp-lakehouseproject-bronze</td><td>Raw landing zone — ingest writes CSV here (Stage: SOURCE → BRONZE)</td></tr>
+    <tr><td><span class="badge badge-storage">GCS Bucket</span></td><td>gcp-lakehouseproject-silver</td><td>Cleaned Parquet data after Databricks transformation (BRONZE → SILVER)</td></tr>
+    <tr><td><span class="badge badge-storage">GCS Bucket</span></td><td>gcp-lakehouseproject-gold</td><td>Aggregated analytics-ready Parquet (SILVER → GOLD)</td></tr>
+    <tr><td><span class="badge badge-storage">GCS Bucket</span></td><td>gcp-lakehouseproject-ai</td><td>Vertex AI embedding artifacts and RAG manifests</td></tr>
+    <tr><td><span class="badge badge-storage">GCS Bucket</span></td><td>gcp-lakehouseproject-tfstate</td><td>Terraform remote state (manually provisioned)</td></tr>
+  </tbody>
+</table>
+
+<!-- BigQuery -->
+<h2>📊 BigQuery</h2>
+<div class="section-note">Defined in bigquery.tf</div>
+<table>
+  <thead><tr><th>Resource Type</th><th>Name / ID</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-bq">Dataset</span></td><td>aviation_analytics</td><td>Top-level dataset containing all tables and views</td></tr>
+    <tr><td><span class="badge badge-bq">External Table</span></td><td>silver_flights_ext</td><td>Parquet-backed external table over silver GCS bucket</td></tr>
+    <tr><td><span class="badge badge-bq">External Table</span></td><td>gold_summary_ext</td><td>Parquet-backed external table over gold GCS bucket</td></tr>
+    <tr><td><span class="badge badge-bq">View</span></td><td>bi_airline_performance_v</td><td>BI: per-airline delay and on-time performance</td></tr>
+    <tr><td><span class="badge badge-bq">View</span></td><td>bi_route_performance_v</td><td>BI: per-route delay statistics</td></tr>
+    <tr><td><span class="badge badge-bq">View</span></td><td>bi_daily_delays_v</td><td>BI: daily delay trend aggregations</td></tr>
+    <tr><td><span class="badge badge-bq">View</span></td><td>bi_pipeline_refresh_v</td><td>BI: pipeline freshness and data latency</td></tr>
+    <tr><td><span class="badge badge-bq">View</span></td><td>ai_delay_explanations_v</td><td>AI: structured delay explanations for RAG context</td></tr>
+    <tr><td><span class="badge badge-bq">View</span></td><td>ai_route_risk_v</td><td>AI: route risk scoring for RAG retrieval</td></tr>
+    <tr><td><span class="badge badge-bq">Native Table</span></td><td>ai_rag_documents</td><td>Primary source for RAG — flight records as JSON documents</td></tr>
+    <tr><td><span class="badge badge-bq">View</span></td><td>ai_nl_analytics_facts_v</td><td>AI: structured facts for natural-language analytics queries</td></tr>
+  </tbody>
+</table>
+
+<!-- GKE -->
+<h2>⚙️ GKE Autopilot &amp; Artifact Registry</h2>
+<div class="section-note">Defined in gke.tf</div>
+<table>
+  <thead><tr><th>Resource Type</th><th>Name / ID</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-gke">GKE Autopilot Cluster</span></td><td>aviation-pipeline</td><td>Runs daily ingest CronJob (06:00 UTC) — synthetic flight data generator</td></tr>
+    <tr><td><span class="badge badge-gke">Artifact Registry</span></td><td>aviation-pipeline (Docker)</td><td>Stores ingest and retrieval service container images</td></tr>
+    <tr><td><span class="badge badge-gke">Service Account</span></td><td>aviation-pipeline-sa</td><td>GKE Workload Identity SA — scoped to Bronze bucket write only</td></tr>
+  </tbody>
+</table>
+
+<!-- Vertex AI -->
+<h2>🤖 Vertex AI</h2>
+<div class="section-note">Defined in vertex_ai.tf, vector_search.tf</div>
+<table>
+  <thead><tr><th>Resource Type</th><th>Name / ID</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-vertex">Service Account</span></td><td>aviation-ai-sa</td><td>AI pipeline SA for embedding generation and BigQuery analytics</td></tr>
+    <tr><td><span class="badge badge-vertex">Vector Search Index</span></td><td>aviation-rag</td><td>Stores text-embedding-005 vectors for aviation RAG documents</td></tr>
+    <tr><td><span class="badge badge-vertex">Index Endpoint</span></td><td>aviation-rag</td><td>Public endpoint for semantic nearest-neighbour queries</td></tr>
+    <tr><td><span class="badge badge-vertex">Models (API)</span></td><td>text-embedding-005 / gemini-2.5-flash</td><td>Embedding model and reasoning model — consumed via API, no provisioning</td></tr>
+  </tbody>
+</table>
+
+<!-- Cloud Run -->
+<h2>🚀 Cloud Run</h2>
+<div class="section-note">Defined in retrieval_service.tf</div>
+<table>
+  <thead><tr><th>Resource Type</th><th>Name / ID</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-cloudrun">Cloud Run Service</span></td><td>aviation-retrieval</td><td>Flask HTTP service — RAG retrieval + Gemini reasoning + session memory</td></tr>
+    <tr><td><span class="badge badge-cloudrun">Service Account</span></td><td>aviation-retrieval-sa</td><td>Cloud Run identity — roles: aiplatform.user, bigquery, storage, datastore.user</td></tr>
+  </tbody>
+</table>
+
+<!-- Firestore -->
+<h2>🗄️ Firestore</h2>
+<div class="section-note">Defined in firestore.tf</div>
+<table>
+  <thead><tr><th>Resource Type</th><th>Name / ID</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-firestore">Firestore Database</span></td><td>rag-sessions</td><td>Durable conversation history store for RAG session memory (Native mode)</td></tr>
+    <tr><td><span class="badge badge-firestore">TTL Field Policy</span></td><td>sessions.expireAt</td><td>Auto-deletes session documents after 1 hour of inactivity</td></tr>
+  </tbody>
+</table>
+
+<!-- IAM Summary -->
+<h2>🔑 IAM Roles Summary</h2>
+<div class="section-note">Key bindings across all .tf files</div>
+<table>
+  <thead><tr><th>Service Account</th><th>Role</th><th>Scope</th></tr></thead>
+  <tbody>
+    <tr><td>aviation-pipeline-sa</td><td>roles/storage.objectCreator</td><td>Bronze bucket only</td></tr>
+    <tr><td>aviation-pipeline-sa</td><td>roles/aiplatform.user</td><td>Project</td></tr>
+    <tr><td>aviation-pipeline-sa</td><td>roles/bigquery.user + dataEditor</td><td>Project</td></tr>
+    <tr><td>aviation-ai-sa</td><td>roles/aiplatform.user</td><td>Project</td></tr>
+    <tr><td>aviation-ai-sa</td><td>roles/bigquery.user + dataViewer</td><td>Project</td></tr>
+    <tr><td>aviation-ai-sa</td><td>roles/storage.objectAdmin</td><td>AI artifacts bucket</td></tr>
+    <tr><td>aviation-retrieval-sa</td><td>roles/aiplatform.user</td><td>Project</td></tr>
+    <tr><td>aviation-retrieval-sa</td><td>roles/bigquery.dataViewer + jobUser</td><td>Project</td></tr>
+    <tr><td>aviation-retrieval-sa</td><td>roles/storage.objectViewer</td><td>AI artifacts bucket</td></tr>
+    <tr><td>aviation-retrieval-sa</td><td>roles/datastore.user</td><td>Project (Firestore)</td></tr>
+  </tbody>
+</table>
+
+<div class="footer">
+  GCP Aviation Lakehouse Platform &nbsp;·&nbsp; github.com/vfuller1/GCP-aviation-lakehouse-platform &nbsp;·&nbsp; Generated May 13, 2026
+</div>
+
+</body>
+</html>
