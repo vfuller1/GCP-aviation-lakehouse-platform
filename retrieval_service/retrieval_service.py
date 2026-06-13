@@ -247,7 +247,7 @@ def query_bigquery_fallback(
         COUNT(*)                                                                                AS flight_count,
         ROUND(AVG(CAST(JSON_VALUE(metadata, '$.departure_delay_min') AS FLOAT64)), 1)          AS avg_delay_min,
         ROUND(
-            COUNTIF(CAST(JSON_VALUE(metadata, '$.weather_flag') AS BOOL)) / COUNT(*) * 100, 1
+            COUNTIF(LOWER(JSON_VALUE(metadata, '$.weather_flag')) = 'true') / COUNT(*) * 100, 1
         )                                                                                       AS weather_impact_pct,
         ROUND(
             COUNTIF(JSON_VALUE(metadata, '$.status') = 'DELAYED') / COUNT(*) * 100, 1
