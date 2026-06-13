@@ -218,19 +218,46 @@ def get_pipeline_status() -> str:
 
     Use when the user asks about data recency or when prior tool calls returned 0 rows
     (may indicate the pipeline hasn't run yet or Parquet export is pending).
-    Returns the latest ingestion timestamp and row counts per summary type.
+    Returns the latest ingestion timestamp and row counts.
     """
     try:
         from google.cloud import bigquery
 
         client = bigquery.Client(project=PROJECT_ID)
-        sql = f"""
-        SELECT summary_type, row_count, latest_generated_ts
+
+        # Primary: bi_pipeline_refresh_v over Gold Parquet (may be empty if Databricks
+        # export has not yet run).
+        gold_sql = f"""
+        SELECT
+            last_generated_ts,
+            gold_summary_rows,
+            airline_rows,
+            route_rows,
+            delayed_day_rows,
+            on_time_rows,
+            total_flights_across_summaries
         FROM `{PROJECT_ID}.{BQ_DATASET}.bi_pipeline_refresh_v`
-        ORDER BY latest_generated_ts DESC
         """
-        rows = [dict(r) for r in client.query(sql).result()]
-        return json.dumps({"status": "ok", "pipeline_data": rows})
+        try:
+            rows = [dict(r) for r in client.query(gold_sql).result()]
+            if rows and rows[0].get("gold_summary_rows"):
+                return json.dumps({"status": "ok", "source": "gold_layer", "pipeline_data": rows})
+            logger.info("bi_pipeline_refresh_v returned 0 gold rows; falling back to ai_rag_documents")
+        except Exception as gold_exc:
+            logger.warning("bi_pipeline_refresh_v failed (%s); falling back to ai_rag_documents", gold_exc)
+
+        # Fallback: ai_rag_documents is always populated by the ingest job.
+        rag_sql = f"""
+        SELECT
+            MAX(event_date)  AS last_ingest_date,
+            MIN(event_date)  AS earliest_ingest_date,
+            COUNT(*)         AS rag_document_count,
+            COUNT(DISTINCT airline) AS airline_count
+        FROM `{PROJECT_ID}.{BQ_DATASET}.ai_rag_documents`
+        """
+        rows = [dict(r) for r in client.query(rag_sql).result()]
+        return json.dumps({"status": "ok", "source": "ai_rag_documents", "pipeline_data": rows})
+
     except Exception as exc:
         return json.dumps({"status": "error", "error": str(exc)})
 
