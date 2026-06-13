@@ -19,6 +19,7 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
   - [Vector Search](#vector-search)
   - [Retrieval Service](#retrieval-service)
   - [Session Memory](#session-memory)
+- [Agentic Layer (LangGraph)](#agentic-layer-langgraph)
 - [BigQuery Views Reference](#bigquery-views-reference)
 - [CI/CD Workflows](#cicd-workflows)
 - [End-to-End Runtime Sequence](#end-to-end-runtime-sequence)
@@ -47,6 +48,8 @@ GitHub push
                                           BigQuery external tables + BI views
                                                     │
                                     Cloud Run Retrieval Service (Flask + Gemini)
+                                          │                    │
+                                  /retrieve (RAG)      /agent (LangGraph)
                                                     │
                                            Firestore session memory
 ```
@@ -87,9 +90,12 @@ The platform follows the **Medallion Architecture** (Bronze / Silver / Gold):
 ├── retrieval_service/
 │   ├── Dockerfile                     # Python 3.11 retrieval service container
 │   ├── retrieval_service.py           # Flask RAG service (Gemini 2.5 Flash)
+│   ├── agent.py                       # LangGraph agentic layer (3 tools, autonomous loop)
 │   └── requirements.txt
 ├── tests/
-│   └── test_retrieval_e2e.py          # E2E smoke tests for retrieval service
+│   ├── test_retrieval_e2e.py          # E2E smoke tests for retrieval service
+│   ├── demo_rag_queries.ps1           # Interactive /retrieve demo (4 questions + session memory)
+│   └── demo_agent_queries.ps1         # Interactive /agent demo (multi-tool autonomous queries)
 ├── backend.tf                         # Terraform GCS backend + provider versions
 ├── bigquery.tf                        # BigQuery dataset, external tables, BI/AI views
 ├── databricks.tf                      # Databricks workspace + jobs (optional)
@@ -268,7 +274,8 @@ A Flask application deployed on **Cloud Run** (`aviation-retrieval`) implements 
 |----------|--------|-------------|
 | `/health` | GET | Liveness check |
 | `/health/ready` | GET | Readiness check (verifies BQ + Vector Search connectivity) |
-| `/retrieve` | POST | RAG query: returns answer + citations |
+| `/retrieve` | POST | RAG query: fixed embed → search → generate sequence |
+| `/agent` | POST | Agentic query: LangGraph loop, autonomous tool selection |
 | `/session/clear` | POST | Clear Firestore session history |
 
 **Example** — ask a delay question:
@@ -281,8 +288,6 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
 ### Session Memory
 
 Conversation history is stored in **Firestore** (`rag-sessions` database). Each `POST /retrieve` call appends the Q&A turn to `sessions/{session_id}`. Sessions expire automatically after 1 hour (TTL on `expireAt`).
-
----
 
 ---
 
@@ -361,6 +366,8 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 | Best for | High-volume, well-scoped questions | Complex, multi-faceted or exploratory questions |
 
 ---
+
+## CI/CD Workflows
 
 ### infra.yml — Terraform Apply
 
