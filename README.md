@@ -19,6 +19,7 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
   - [Vector Search](#vector-search)
   - [Retrieval Service](#retrieval-service)
   - [Session Memory](#session-memory)
+- [End-to-End Request Flows](#end-to-end-request-flows)
 - [Agentic Layer (LangGraph)](#agentic-layer-langgraph)
 - [BigQuery Views Reference](#bigquery-views-reference)
 - [CI/CD Workflows](#cicd-workflows)
@@ -323,6 +324,60 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
 ### Session Memory
 
 Conversation history is stored in **Firestore** (`rag-sessions` database). Both `/retrieve` and `/agent` append each Q&A turn to `sessions/{session_id}`, enabling follow-up questions that reference prior answers. Sessions expire automatically after 1 hour (TTL on `expireAt`). Pass the same `session_id` across calls to maintain context.
+
+---
+
+## End-to-End Request Flows
+
+### /retrieve — Fixed RAG Pipeline
+
+Every request follows the same six steps in the same order.
+
+```
+Client             Cloud Run          Firestore       Vertex AI      Vector Search    BigQuery        Gemini
+  │                    │                  │               │                │               │              │
+  ├──POST /retrieve───►│                  │               │                │               │              │
+  │                    ├──load session───►│               │                │               │              │
+  │                    │◄──prior turns────┤               │                │               │              │
+  │                    ├──embed question───────────────►  │                │               │              │
+  │                    │◄──768-dim vector──────────────   │                │               │              │
+  │                    ├──find top-K neighbours──────────────────────────►│               │              │
+  │                    │◄──matching doc IDs + scores────────────────────── │               │              │
+  │                    ├──fetch RAG docs + analytics facts──────────────────────────────►  │              │
+  │                    │◄──context rows──────────────────────────────────────────────── │  │              │
+  │                    ├──question + context + session history──────────────────────────────────────────►│
+  │                    │◄──grounded answer─────────────────────────────────────────────────────────────  │
+  │                    ├──save Q&A turn──►│               │                │               │              │
+  │◄──{answer, context_count, facts_count, history_turns}─┤                │               │              │
+```
+
+### /agent — LangGraph Autonomous Loop
+
+The agent decides which tools to call and loops until it has enough evidence. Tool calls and loop count vary by question.
+
+```
+Client            Cloud Run        Firestore      LangGraph StateGraph          BigQuery / Vector Search    Gemini
+  │                   │                │                  │                               │                   │
+  ├──POST /agent─────►│                │                  │                               │                   │
+  │                   ├──load session─►│                  │                               │                   │
+  │                   │◄──prior turns──┤                  │                               │                   │
+  │                   ├──invoke(SystemMessage + history + question)────────────────────►  │                   │
+  │                   │                │   ┌──────────────┤                               │                   │
+  │                   │                │   │  agent node ─┼──prompt──────────────────────────────────────────►│
+  │                   │                │   │              │◄─tool_calls───────────────────────────────────────┤
+  │                   │                │   │  tool node   │                               │                   │
+  │                   │                │   │  (per call)  ├──query_analytics / search / status──────────────►│
+  │                   │                │   │              │◄──results────────────────────────────────────────  │
+  │                   │                │   │  agent node ◄┤ (results appended to messages)│                   │
+  │                   │                │   │  (loop repeats until Gemini returns no tool_calls)               │
+  │                   │                │   │  agent node ─┼──final prompt───────────────────────────────────►│
+  │                   │                │   └──────────────┤◄─answer (no tool_calls)────────────────────────── │
+  │                   │◄──final state──────────────────── │                               │                   │
+  │                   ├──save Q&A turn►│                  │                               │                   │
+  │◄──{answer, tools_called, steps}────┤                  │                               │                   │
+```
+
+**Key difference**: `/retrieve` always makes exactly 1 vector search + 1 BigQuery call. `/agent` makes 1–N tool calls chosen at runtime — the `tools_called` array in the response shows exactly what ran.
 
 ---
 
