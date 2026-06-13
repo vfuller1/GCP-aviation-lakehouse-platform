@@ -17,8 +17,9 @@ Environment variables:
 
 import json
 import os
+import re
 import logging
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Tuple
 from datetime import datetime, timedelta
 import functools
 
@@ -34,9 +35,20 @@ except ImportError:
     from vertexai.preview.language_models import TextEmbeddingModel
 
 try:
-    from vertexai.generative_models import GenerativeModel
+    from vertexai.generative_models import GenerativeModel, SafetySetting, HarmCategory, HarmBlockThreshold
+    _SAFETY_SETTINGS = [
+        SafetySetting(category=HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                      threshold=HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE),
+        SafetySetting(category=HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                      threshold=HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE),
+        SafetySetting(category=HarmCategory.HARM_CATEGORY_HARASSMENT,
+                      threshold=HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE),
+        SafetySetting(category=HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                      threshold=HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE),
+    ]
 except ImportError:
     from vertexai.preview.generative_models import GenerativeModel
+    _SAFETY_SETTINGS = []
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -58,6 +70,41 @@ PORT = int(os.getenv("PORT", 8080))
 # Session memory config
 SESSION_MAX_TURNS = int(os.getenv("SESSION_MAX_TURNS", "10"))   # turns kept per session
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "3600"))  # 1-hour idle expiry
+
+# ── Input guardrails ──────────────────────────────────────────────────────────
+MAX_QUESTION_LEN  = 500
+_SAFE_SESSION_RE  = re.compile(r'^[A-Za-z0-9_\-]{1,64}$')
+_AIRLINE_RE       = re.compile(r'^[A-Z0-9]{2,3}$')
+_ROUTE_RE         = re.compile(r'^[A-Z]{3}-[A-Z]{3}$')
+
+
+def _validate_input(
+    question: str,
+    session_id: Optional[str] = None,
+    airline: Optional[str] = None,
+    route: Optional[str] = None,
+    days_back: int = 7,
+    top_k: int = 5,
+) -> Tuple[Optional[str], Optional[int]]:
+    """Return (error_message, http_status) if input is invalid, else (None, None)."""
+    if not question:
+        return "Missing 'question' field", 400
+    if len(question) > MAX_QUESTION_LEN:
+        return f"'question' must be {MAX_QUESTION_LEN} characters or fewer", 400
+    if session_id and not _SAFE_SESSION_RE.match(session_id):
+        return "'session_id' must contain only letters, digits, hyphens, or underscores (max 64 chars)", 400
+    if airline and not _AIRLINE_RE.match(airline):
+        return "'airline' must be a 2–3 character IATA code (e.g. 'AA')", 400
+    if route and not _ROUTE_RE.match(route):
+        return "'route' must be ORIGIN-DEST with 3-letter codes (e.g. 'ATL-LAX')", 400
+    try:
+        if not 1 <= int(days_back) <= 30:
+            return "'days_back' must be between 1 and 30", 400
+        if not 1 <= int(top_k) <= 20:
+            return "'top_k' must be between 1 and 20", 400
+    except (TypeError, ValueError):
+        return "'days_back' and 'top_k' must be integers", 400
+    return None, None
 FIRESTORE_DATABASE = os.getenv("FIRESTORE_DATABASE", "rag-sessions")
 
 # Initialize clients (lazy)
@@ -236,8 +283,18 @@ def query_bigquery_fallback(
     if days_back < 1:
         days_back = 7
 
-    airline_filter = f"AND airline = '{airline}'" if airline else ""
-    route_filter   = f"AND route = '{route}'"     if route   else ""
+    # Build parameterized filters — airline and route come from user input.
+    primary_params = [bigquery.ScalarQueryParameter("days_back", "INT64", days_back)]
+    airline_clause = ""
+    route_clause   = ""
+    if airline:
+        airline_clause = "AND airline = @airline"
+        primary_params.append(bigquery.ScalarQueryParameter("airline", "STRING", airline))
+    if route:
+        route_clause = "AND route = @route"
+        primary_params.append(bigquery.ScalarQueryParameter("route", "STRING", route))
+
+    primary_cfg = bigquery.QueryJobConfig(query_parameters=primary_params)
 
     # --- Primary: query ai_rag_documents (native BQ table, confirmed populated) ---
     rag_sql = f"""
@@ -253,16 +310,16 @@ def query_bigquery_fallback(
             COUNTIF(JSON_VALUE(metadata, '$.status') = 'DELAYED') / COUNT(*) * 100, 1
         )                                                                                       AS delayed_pct
     FROM `{PROJECT_ID}.{BQ_DATASET}.ai_rag_documents`
-    WHERE event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {days_back} DAY)
-      {airline_filter}
-      {route_filter}
+    WHERE event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @days_back DAY)
+      {airline_clause}
+      {route_clause}
     GROUP BY airline, route
     ORDER BY avg_delay_min DESC
     LIMIT 10
     """
 
     try:
-        rows = [dict(r) for r in client.query(rag_sql).result()]
+        rows = [dict(r) for r in client.query(rag_sql, job_config=primary_cfg).result()]
         if rows:
             logger.info(f"ai_rag_documents returned {len(rows)} fact rows")
             return rows
@@ -271,7 +328,19 @@ def query_bigquery_fallback(
         logger.error(f"ai_rag_documents query failed: {e}")
 
     # --- Secondary: silver_flights_ext / ai_route_risk_v views ---
-    date_filter = f"DATE_SUB(CURRENT_DATE(), INTERVAL {days_back} DAY)"
+    # days_back is a validated integer — safe to interpolate directly.
+    date_expr = f"DATE_SUB(CURRENT_DATE(), INTERVAL {days_back} DAY)"
+
+    sec_params: list = []
+    sec_airline_clause = ""
+    sec_route_clause   = ""
+    if airline:
+        sec_airline_clause = "AND airline = @airline"
+        sec_params.append(bigquery.ScalarQueryParameter("airline", "STRING", airline))
+    if route:
+        sec_route_clause = "AND route = @route"
+        sec_params.append(bigquery.ScalarQueryParameter("route", "STRING", route))
+    sec_cfg = bigquery.QueryJobConfig(query_parameters=sec_params) if sec_params else None
 
     if query_type.lower() in ["route_risk", "risk", "disruption"]:
         sql = f"""
@@ -283,7 +352,7 @@ def query_bigquery_fallback(
             ROUND(severe_delay_rate * 100, 1)         AS severe_delay_pct,
             ROUND(weather_impact_rate * 100, 1)       AS weather_impact_pct
         FROM `{PROJECT_ID}.{BQ_DATASET}.ai_route_risk_v`
-        WHERE 1=1 {route_filter}
+        WHERE 1=1 {sec_route_clause}
         ORDER BY avg_risk_score DESC
         LIMIT 10
         """
@@ -297,7 +366,7 @@ def query_bigquery_fallback(
                   / COUNT(*) * 100, 1)                                                   AS delayed_pct,
             ROUND(SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END) / COUNT(*) * 100, 1)    AS weather_impact_pct
         FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
-        WHERE DATE(event_ts) >= {date_filter} {airline_filter}
+        WHERE DATE(event_ts) >= {date_expr} {sec_airline_clause}
         GROUP BY airline
         ORDER BY avg_delay_minutes DESC
         LIMIT 10
@@ -310,7 +379,7 @@ def query_bigquery_fallback(
             ROUND(SUM(CASE WHEN weather_flag THEN 1 ELSE 0 END) / COUNT(*) * 100, 1)               AS weather_pct,
             ROUND(AVG(CASE WHEN weather_flag THEN CAST(departure_delay_min AS FLOAT64) END), 1)     AS avg_delay_if_weather
         FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
-        WHERE DATE(event_ts) >= {date_filter}
+        WHERE DATE(event_ts) >= {date_expr}
         """
     else:
         sql = f"""
@@ -320,11 +389,11 @@ def query_bigquery_fallback(
             COUNT(DISTINCT CONCAT(origin, '-', destination))                  AS route_count,
             ROUND(AVG(CAST(departure_delay_min AS FLOAT64)), 1)              AS avg_delay_minutes
         FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
-        WHERE DATE(event_ts) >= {date_filter}
+        WHERE DATE(event_ts) >= {date_expr}
         """
 
     try:
-        rows = [dict(r) for r in client.query(sql).result()]
+        rows = [dict(r) for r in client.query(sql, job_config=sec_cfg).result()]
         logger.info(f"Secondary BQ query returned {len(rows)} rows")
         return rows
     except Exception as e:
@@ -381,7 +450,8 @@ def reason_with_vertex(prompt: str) -> str:
     """Call Vertex Reasoning API to generate a grounded answer."""
     try:
         client = get_reasoning_client()
-        response = client.generate_content(prompt)
+        kwargs = {"safety_settings": _SAFETY_SETTINGS} if _SAFETY_SETTINGS else {}
+        response = client.generate_content(prompt, **kwargs)
         return response.text
     except Exception as e:
         logger.error(f"Vertex Reasoning failed: {e}")
@@ -428,15 +498,16 @@ def retrieve():
     """
     try:
         payload = request.get_json(silent=True) or {}
-        question = payload.get("question", "").strip()
-        airline = payload.get("airline", "").upper() or None
-        route = payload.get("route", "").upper() or None
-        days_back = payload.get("days_back", 7)
-        top_k = payload.get("top_k", 5)
+        question   = payload.get("question", "").strip()
+        airline    = payload.get("airline", "").upper().strip() or None
+        route      = payload.get("route", "").upper().strip() or None
+        days_back  = payload.get("days_back", 7)
+        top_k      = payload.get("top_k", 5)
         session_id = payload.get("session_id", "").strip() or None
-        
-        if not question:
-            return jsonify({"error": "Missing 'question' field"}), 400
+
+        err, status = _validate_input(question, session_id, airline, route, days_back, top_k)
+        if err:
+            return jsonify({"error": err}), status
         
         logger.info(f"Query: {question} (airline={airline}, route={route}, days_back={days_back}, session={session_id})")
 
@@ -579,8 +650,9 @@ def agent_query():
         question   = payload.get("question", "").strip()
         session_id = payload.get("session_id", "").strip() or None
 
-        if not question:
-            return jsonify({"error": "Missing 'question' field"}), 400
+        err, status = _validate_input(question, session_id)
+        if err:
+            return jsonify({"error": err}), status
 
         logger.info(f"Agent query: {question} (session={session_id})")
 

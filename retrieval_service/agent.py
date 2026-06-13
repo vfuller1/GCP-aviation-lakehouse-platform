@@ -139,20 +139,32 @@ def query_analytics(
 
         client    = bigquery.Client(project=PROJECT_ID)
         days_back = max(1, min(int(days_back), 30))
-        al_filter = f"AND airline = '{airline.upper()}'" if airline else ""
-        rt_filter = f"AND route = '{route.upper()}'"     if route   else ""
+        airline   = airline.upper() if airline else ""
+        route     = route.upper()   if route   else ""
         date_expr = f"DATE_SUB(CURRENT_DATE(), INTERVAL {days_back} DAY)"
+
+        # Parameterized filters — airline and route come from LLM tool calls.
+        def _cfg(include_airline: bool = False, include_route: bool = False):
+            p = [bigquery.ScalarQueryParameter("days_back", "INT64", days_back)]
+            if include_airline and airline:
+                p.append(bigquery.ScalarQueryParameter("airline", "STRING", airline))
+            if include_route and route:
+                p.append(bigquery.ScalarQueryParameter("route", "STRING", route))
+            return bigquery.QueryJobConfig(query_parameters=p)
+
+        al_clause = "AND airline = @airline" if airline else ""
+        rt_clause = "AND route = @route"     if route   else ""
 
         # Native table fallback — always populated, no GCS dependency.
         generic_sql = f"""
         SELECT airline, route,
                COUNT(*) AS flight_count,
                ROUND(AVG(CAST(JSON_VALUE(metadata, '$.departure_delay_min') AS FLOAT64)), 1) AS avg_delay_min,
-               ROUND(COUNTIF(CAST(JSON_VALUE(metadata, '$.weather_flag') AS BOOL)) / COUNT(*) * 100, 1) AS weather_pct,
+               ROUND(COUNTIF(LOWER(JSON_VALUE(metadata, '$.weather_flag')) = 'true') / COUNT(*) * 100, 1) AS weather_pct,
                ROUND(COUNTIF(JSON_VALUE(metadata, '$.status') = 'DELAYED') / COUNT(*) * 100, 1) AS delayed_pct
         FROM `{PROJECT_ID}.{BQ_DATASET}.ai_rag_documents`
-        WHERE event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL {days_back} DAY)
-          {al_filter} {rt_filter}
+        WHERE event_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @days_back DAY)
+          {al_clause} {rt_clause}
         GROUP BY airline, route
         ORDER BY avg_delay_min DESC
         LIMIT 10
@@ -166,10 +178,11 @@ def query_analytics(
                    ROUND(disruption_rate * 100, 1)           AS disruption_pct,
                    ROUND(weather_impact_rate * 100, 1)       AS weather_impact_pct
             FROM `{PROJECT_ID}.{BQ_DATASET}.ai_route_risk_v`
-            WHERE 1=1 {rt_filter}
+            WHERE 1=1 {rt_clause}
             ORDER BY avg_risk_score DESC
             LIMIT 10
             """
+            primary_cfg = _cfg(include_route=bool(route))
         elif query_type in ("airline", "performance", "delays"):
             primary_sql = f"""
             SELECT airline,
@@ -178,11 +191,12 @@ def query_analytics(
                    ROUND(COUNTIF(departure_delay_min > 15) / COUNT(*) * 100, 1)          AS delayed_pct,
                    ROUND(COUNTIF(weather_flag) / COUNT(*) * 100, 1)                      AS weather_pct
             FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
-            WHERE DATE(event_ts) >= {date_expr} {al_filter}
+            WHERE DATE(event_ts) >= {date_expr} {al_clause}
             GROUP BY airline
             ORDER BY avg_delay_min DESC
             LIMIT 10
             """
+            primary_cfg = _cfg(include_airline=bool(airline))
         elif query_type == "weather":
             primary_sql = f"""
             SELECT COUNT(*) AS total_flights,
@@ -192,19 +206,22 @@ def query_analytics(
             FROM `{PROJECT_ID}.{BQ_DATASET}.silver_flights_ext`
             WHERE DATE(event_ts) >= {date_expr}
             """
+            primary_cfg = _cfg()
         else:
             primary_sql = generic_sql
+            primary_cfg = _cfg(include_airline=bool(airline), include_route=bool(route))
 
         # Try the primary query; fall back to ai_rag_documents if the external table is unavailable.
         try:
-            rows = [dict(r) for r in client.query(primary_sql).result()]
+            rows = [dict(r) for r in client.query(primary_sql, job_config=primary_cfg).result()]
             if rows:
                 return json.dumps({"row_count": len(rows), "rows": rows, "source": "primary"})
             logger.info("Primary query returned 0 rows; trying ai_rag_documents fallback")
         except Exception as primary_exc:
             logger.warning("Primary query failed (%s); falling back to ai_rag_documents", primary_exc)
 
-        rows = [dict(r) for r in client.query(generic_sql).result()]
+        generic_cfg = _cfg(include_airline=bool(airline), include_route=bool(route))
+        rows = [dict(r) for r in client.query(generic_sql, job_config=generic_cfg).result()]
         return json.dumps({"row_count": len(rows), "rows": rows, "source": "ai_rag_documents"})
 
     except Exception as exc:
