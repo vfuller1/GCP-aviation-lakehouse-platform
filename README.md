@@ -284,6 +284,84 @@ Conversation history is stored in **Firestore** (`rag-sessions` database). Each 
 
 ---
 
+---
+
+## Agentic Layer (LangGraph)
+
+The `/agent` endpoint wraps the same GCP tools in a **LangGraph reasoning loop** — instead of a fixed embed → search → generate sequence, the agent decides autonomously which tools to call and in what order until it has enough evidence to answer.
+
+### Architecture
+
+```
+POST /agent
+    │
+    ▼
+SystemMessage + session history + question
+    │
+    ▼
+┌──────────────────────────────────────────────────────┐
+│  LangGraph StateGraph                                │
+│                                                      │
+│  ┌─────────┐    tool_calls?     ┌──────────────┐   │
+│  │  agent  │ ─── yes ────────► │  tool_node   │   │
+│  │(Gemini) │ ◄── results ────  │              │   │
+│  └─────────┘                   │  • search_flight_records  │
+│       │                        │  • query_analytics        │
+│       │ no tool_calls          │  • get_pipeline_status    │
+│       ▼                        └──────────────┘   │
+│     END                                            │
+└──────────────────────────────────────────────────────┘
+    │
+    ▼
+Grounded answer + tools_called list + step count
+```
+
+### Tools
+
+| Tool | When the agent uses it |
+|------|----------------------|
+| `search_flight_records` | Specific routes, airlines, or events — semantic similarity over individual records |
+| `query_analytics` | Aggregate stats (worst airline, weather trends, route risk rankings) |
+| `get_pipeline_status` | Data freshness check — called automatically if prior tools return 0 rows |
+
+### Example
+
+```bash
+# Single-turn agentic query
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Which airline should I avoid if flying into ATL this week due to weather delays?", "session_id": "demo-agent-1"}'
+
+# Multi-turn: follow-up uses Firestore session history
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What about routes out of LAX for the same airline?", "session_id": "demo-agent-1"}'
+```
+
+**Response shape:**
+```json
+{
+  "question":     "Which airline should I avoid ...",
+  "answer":       "Based on 7-day analytics data, Spirit Airlines (NK) shows the highest average departure delay of 47.2 minutes and a 34% delayed flight rate...",
+  "session_id":   "demo-agent-1",
+  "tools_called": ["query_analytics", "search_flight_records"],
+  "steps":        5,
+  "timestamp":    "2026-06-13T12:00:00Z"
+}
+```
+
+### /retrieve vs /agent
+
+| | `/retrieve` | `/agent` |
+|---|---|---|
+| Flow | Fixed: embed → vector search → BQ → Gemini | Autonomous: agent decides tools + order |
+| Tool calls | Always 1 vector search + 1 BQ query | 1–N calls based on question complexity |
+| Multi-step reasoning | No | Yes — can refine query if first call is empty |
+| Latency | Lower (~2–4 s) | Higher (~4–10 s depending on steps) |
+| Best for | High-volume, well-scoped questions | Complex, multi-faceted or exploratory questions |
+
+---
+
 ### infra.yml — Terraform Apply
 
 **Trigger**: Push to `main` touching any `.tf` file or `infra.yml`; also `workflow_dispatch`.

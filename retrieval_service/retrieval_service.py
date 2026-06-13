@@ -545,6 +545,81 @@ def session_clear():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/agent", methods=["POST"])
+def agent_query():
+    """
+    Agentic query endpoint — LangGraph reasoning loop.
+
+    Unlike /retrieve (which runs a fixed embed→search→generate sequence), this
+    endpoint lets the agent autonomously decide which tools to call and in what
+    order, looping until it has enough evidence to construct a grounded answer.
+
+    Request JSON:
+    {
+        "question":   "Which airline should I avoid if flying into ATL this week?",
+        "session_id": "optional-session-id"
+    }
+
+    Response JSON:
+    {
+        "question":     "...",
+        "answer":       "Grounded answer with citations",
+        "session_id":   "...",
+        "tools_called": ["query_analytics", "search_flight_records"],
+        "steps":        4,
+        "timestamp":    "..."
+    }
+    """
+    try:
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+        import agent as aviation_agent
+
+        payload    = request.get_json(silent=True) or {}
+        question   = payload.get("question", "").strip()
+        session_id = payload.get("session_id", "").strip() or None
+
+        if not question:
+            return jsonify({"error": "Missing 'question' field"}), 400
+
+        logger.info(f"Agent query: {question} (session={session_id})")
+
+        # Build message list: system prompt + Firestore history + current question
+        messages = [SystemMessage(content=aviation_agent.SYSTEM_PROMPT)]
+        if session_id:
+            for turn in get_session_history(session_id):
+                if turn["role"] == "user":
+                    messages.append(HumanMessage(content=turn["content"]))
+                else:
+                    messages.append(AIMessage(content=turn["content"]))
+        messages.append(HumanMessage(content=question))
+
+        # Run the agent loop
+        result = aviation_agent.run(messages)
+
+        answer = result["messages"][-1].content
+        tools_called = [
+            m.name for m in result["messages"]
+            if hasattr(m, "name") and m.name
+        ]
+
+        if session_id:
+            append_session_turn(session_id, question, answer)
+
+        return jsonify({
+            "question":     question,
+            "answer":       answer,
+            "session_id":   session_id,
+            "tools_called": tools_called,
+            "steps":        len(result["messages"]),
+            "timestamp":    datetime.utcnow().isoformat() + "Z",
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Agent query failed: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     logger.info(f"Starting Aviation Retrieval Service on port {PORT}")
     logger.info(f"Project: {PROJECT_ID}, Region: {VERTEX_REGION}, Model: {REASONING_MODEL}")

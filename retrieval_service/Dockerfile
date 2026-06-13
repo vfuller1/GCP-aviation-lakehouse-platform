@@ -27,6 +27,7 @@ ENV PATH=/root/.local/bin:$PATH \
 
 # Copy application code
 COPY retrieval_service.py .
+COPY agent.py .
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
