@@ -89,7 +89,7 @@ def search_flight_records(question: str, top_k: int = 5) -> str:
         )
         response = client.match({
             "index_endpoint": f"projects/{PROJECT_ID}/locations/{VECTOR_REGION}/indexEndpoints/{endpoint_id}",
-            "deployed_index_id": "aviation-rag-deployed",
+            "deployed_index_id": "aviation_rag_deployed",
             "queries": [{"datapoint": {"vector": embedding}}],
             "return_full_datapoint": True,
         })

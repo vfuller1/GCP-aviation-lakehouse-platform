@@ -187,7 +187,7 @@ def search_vector_index(query_vector: List[float], top_k: int = 5) -> List[Dict[
         
         request_body = {
             "index_endpoint": f"projects/{PROJECT_ID}/locations/{VECTOR_REGION}/indexEndpoints/{_resource_id(VECTOR_ENDPOINT_ID)}",
-            "deployed_index_id": "aviation-rag-deployed",
+            "deployed_index_id": "aviation_rag_deployed",
             "queries": [
                 {
                     "datapoint": {

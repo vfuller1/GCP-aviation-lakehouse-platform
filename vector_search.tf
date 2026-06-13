@@ -57,8 +57,8 @@ resource "google_vertex_ai_index_endpoint_deployed_index" "aviation_rag" {
   count             = var.enable_vertex_ai && var.enable_vector_search ? 1 : 0
   index_endpoint    = google_vertex_ai_index_endpoint.aviation_rag[0].id
   index             = google_vertex_ai_index.aviation_rag[0].id
-  deployed_index_id = "aviation-rag-deployed"
-  display_name      = "aviation-rag-deployed"
+  deployed_index_id = "aviation_rag_deployed"
+  display_name      = "aviation_rag_deployed"
 
   automatic_resources {
     min_replica_count = 2
@@ -89,5 +89,5 @@ output "vector_search_index_endpoint_domain_name" {
 
 output "deployed_index_id" {
   description = "Stable deployed index ID used when calling the endpoint API"
-  value       = "aviation-rag-deployed"
+  value       = "aviation_rag_deployed"
 }
