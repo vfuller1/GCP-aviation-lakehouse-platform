@@ -1,6 +1,6 @@
 # GCP Aviation Lakehouse Platform
 
-A fully automated, cloud-native data lakehouse built on Google Cloud Platform that ingests synthetic aviation flight data, applies medallion-architecture transformations, and surfaces analytics through BigQuery BI views and a Gemini-powered RAG retrieval service — all triggered from a single `git push`.
+A fully automated, cloud-native data lakehouse built on Google Cloud Platform that ingests synthetic aviation flight data, applies medallion-architecture transformations, and surfaces analytics through two AI layers — a **Gemini-powered RAG retrieval service** (`/retrieve`) and a **LangGraph agentic reasoning loop** (`/agent`) — all triggered from a single `git push`.
 
 ---
 
@@ -23,6 +23,7 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 - [BigQuery Views Reference](#bigquery-views-reference)
 - [CI/CD Workflows](#cicd-workflows)
 - [End-to-End Runtime Sequence](#end-to-end-runtime-sequence)
+- [Quick Start / Testing](#quick-start--testing)
 - [Prerequisites & Secrets](#prerequisites--secrets)
 - [Configuration Variables](#configuration-variables)
 
@@ -287,7 +288,7 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
 
 ### Session Memory
 
-Conversation history is stored in **Firestore** (`rag-sessions` database). Each `POST /retrieve` call appends the Q&A turn to `sessions/{session_id}`. Sessions expire automatically after 1 hour (TTL on `expireAt`).
+Conversation history is stored in **Firestore** (`rag-sessions` database). Both `/retrieve` and `/agent` append each Q&A turn to `sessions/{session_id}`, enabling follow-up questions that reference prior answers. Sessions expire automatically after 1 hour (TTL on `expireAt`). Pass the same `session_id` across calls to maintain context.
 
 ---
 
@@ -328,6 +329,8 @@ Grounded answer + tools_called list + step count
 | `search_flight_records` | Specific routes, airlines, or events — semantic similarity over individual records |
 | `query_analytics` | Aggregate stats (worst airline, weather trends, route risk rankings) |
 | `get_pipeline_status` | Data freshness check — called automatically if prior tools return 0 rows |
+
+> **Resilience note**: `query_analytics` tries the richer BigQuery external tables (`silver_flights_ext`, `ai_route_risk_v`) first. If those are unavailable (Parquet export not yet run, or GCS IAM restriction), it automatically falls back to the native `ai_rag_documents` table, which is always populated by the ingest job. The agent always gets an answer.
 
 ### Example
 
@@ -429,6 +432,50 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 ```
 
 **Recurring**: The GKE CronJob re-runs ingest daily at **06:00 UTC**. A full Databricks pipeline run should be triggered separately on a schedule (or via `workflow_dispatch`) after each ingest.
+
+---
+
+## Quick Start / Testing
+
+**Base URL**: `https://aviation-retrieval-ohvijuloea-uc.a.run.app`
+
+### 1. Health check
+```bash
+curl https://aviation-retrieval-ohvijuloea-uc.a.run.app/health/ready
+# → {"ready": true}
+```
+
+### 2. RAG layer — interactive demo (PowerShell)
+```powershell
+.\tests\demo_rag_queries.ps1
+```
+Runs 4 questions against `/retrieve`, with the last question testing Firestore session memory.
+
+### 3. Agent layer — interactive demo (PowerShell)
+```powershell
+.\tests\demo_agent_queries.ps1
+```
+Runs 4 questions against `/agent`. Watch the `[Tools called: ...]` line on each response — it shows which tools the agent invoked autonomously and in what order.
+
+### 4. Single curl query (agent)
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Which airline has the worst delays this week?", "session_id": "my-session"}'
+```
+
+### 5. Multi-turn session (agent)
+```bash
+# First question
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Which routes have the highest weather delay risk?", "session_id": "my-session"}'
+
+# Follow-up — references context from the first answer
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "For those routes, which airline handles it best?", "session_id": "my-session"}'
+```
 
 ---
 
