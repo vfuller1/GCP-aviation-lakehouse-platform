@@ -584,20 +584,31 @@ def agent_query():
 
         logger.info(f"Agent query: {question} (session={session_id})")
 
+        def _as_str(content) -> str:
+            """Normalize langchain message content to plain string.
+            Newer langchain-core may return a list of content parts instead of a str."""
+            if isinstance(content, list):
+                return " ".join(
+                    p.get("text", "") if isinstance(p, dict) else str(p)
+                    for p in content
+                )
+            return content or ""
+
         # Build message list: system prompt + Firestore history + current question
         messages = [SystemMessage(content=aviation_agent.SYSTEM_PROMPT)]
         if session_id:
             for turn in get_session_history(session_id):
+                text = _as_str(turn.get("content", ""))
                 if turn["role"] == "user":
-                    messages.append(HumanMessage(content=turn["content"]))
+                    messages.append(HumanMessage(content=text))
                 else:
-                    messages.append(AIMessage(content=turn["content"]))
+                    messages.append(AIMessage(content=text))
         messages.append(HumanMessage(content=question))
 
         # Run the agent loop
         result = aviation_agent.run(messages)
 
-        answer = result["messages"][-1].content
+        answer = _as_str(result["messages"][-1].content)
         tools_called = [
             m.name for m in result["messages"]
             if hasattr(m, "name") and m.name
