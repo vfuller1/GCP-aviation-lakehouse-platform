@@ -37,33 +37,67 @@ GitHub push
     ├─[infra.yml]──► Terraform ──► GCS · BigQuery · GKE · Vertex AI · Vector Search
     │                               Cloud Run · Firestore · Artifact Registry
     │
-    └─[pipeline.yml]─► Docker build/push ──► GKE CronJob (Bronze ingest)
-                                                    │
-                                          Vertex AI text-embedding-005
-                                          ai_rag_documents (BigQuery)
-                                                    │
-                                          Databricks: Bronze → Silver → Gold
-                                                    │
-                                          GCS Parquet (Silver / Gold)
-                                                    │
-                                          BigQuery external tables + BI views
-                                                    │
-                                    Cloud Run Retrieval Service (Flask + Gemini)
-                                          │                    │
-                                  /retrieve (RAG)      /agent (LangGraph)
-                                                    │
-                                           Firestore session memory
+    └─[pipeline.yml]─► Docker build/push
+                              │
+                    ┌─────────▼──────────────────────────────────────┐
+                    │  BRONZE  gs://.../bronze/  raw CSV              │
+                    │  GKE CronJob: ingest.py (5,000 flights/day)     │
+                    │  Vertex AI text-embedding-005                   │
+                    │  → ai_rag_documents (BigQuery native table)     │
+                    └─────────┬──────────────────────────────────────┘
+                              │
+                    Databricks: bronze_to_silver.py
+                    ├── Cast strings → INT / BOOL / TIMESTAMP
+                    ├── Drop rows missing flight_id / airline / origin / dest
+                    ├── Remove delay outliers (< −60 or > 600 min)
+                    └── Deduplicate on flight_id
+                              │
+                    ┌─────────▼──────────────────────────────────────┐
+                    │  SILVER  gs://.../silver/  Parquet (flat)       │
+                    │  Delta table: silver_flights                    │
+                    │  Cleaned · validated · deduplicated flights     │
+                    └─────────┬──────────────────────────────────────┘
+                              │
+                    Databricks: silver_to_gold.py
+                    ├── Aggregate by airline  → avg delay, total flights
+                    ├── Aggregate by route    → ORIGIN-DEST KPIs
+                    ├── Aggregate by day      → delayed count, weather count
+                    └── On-time % per airline
+                              │
+                    ┌─────────▼──────────────────────────────────────┐
+                    │  GOLD    gs://.../gold/    Parquet (flat)       │
+                    │  Delta table: gold_flight_summary               │
+                    │  Business KPIs · rankings · daily trends        │
+                    └─────────┬──────────────────────────────────────┘
+                              │
+                    Databricks: export_tables_to_gcs.py
+                    Flat Parquet write (no partitionBy) so summary_type
+                    and all partition columns appear as BigQuery columns
+                              │
+                    ┌─────────▼──────────────────────────────────────┐
+                    │  BigQuery: aviation_analytics dataset           │
+                    │  silver_flights_ext · gold_summary_ext          │
+                    │  BI views: airline perf · routes · delays       │
+                    │  AI views: route risk · delay explanations      │
+                    └─────────┬──────────────────────────────────────┘
+                              │
+              Cloud Run: aviation-retrieval (Flask + Gemini 2.5 Flash)
+                        │                         │
+                 /retrieve (RAG)          /agent (LangGraph)
+                        └──────────┬──────────────┘
+                           Firestore: rag-sessions
+                           (session_id → Q&A turns, 1-hr TTL)
 ```
 
 The platform follows the **Medallion Architecture** (Bronze / Silver / Gold):
 
 | Layer | Storage | Format | Contents |
 |-------|---------|--------|----------|
-| Bronze | `gcp-lakehouseproject-bronze` | CSV | Raw, unvalidated flight records |
-| Silver | `gcp-lakehouseproject-silver` | Parquet (flat) | Cleaned, validated, deduplicated flights |
-| Gold | `gcp-lakehouseproject-gold` | Parquet (flat) | Business-level aggregations |
-| AI | `gcp-lakehouseproject-ai` | JSON embeddings | RAG documents + Vertex AI index data |
-| BI | BigQuery `aviation_analytics` | External tables + Views | Dashboard-ready analytics |
+| Bronze | `gcp-lakehouseproject-bronze` | CSV | Raw, unvalidated flight records — written by GKE ingest job |
+| Silver | `gcp-lakehouseproject-silver` | Parquet (flat) | Cleaned, validated, deduplicated — written by Databricks `bronze_to_silver` |
+| Gold | `gcp-lakehouseproject-gold` | Parquet (flat) | Business aggregations — written by Databricks `silver_to_gold` |
+| AI | `gcp-lakehouseproject-ai` | JSON embeddings | RAG documents + Vertex AI Vector Search index data |
+| BI | BigQuery `aviation_analytics` | External tables + Views | Dashboard-ready analytics over Silver/Gold Parquet |
 
 ---
 
@@ -395,8 +429,10 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 3. Build + push retrieval service Docker image and deploy to Cloud Run
 4. Apply K8s manifests and update CronJob image to new commit SHA
 5. Trigger one-off ingest job (on every push or when `run_ingest_now=true`)
-6. Run Databricks pipeline: Bronze → Silver → Gold → Export
-   - Gracefully skips if `DATABRICKS_HOST`/`DATABRICKS_TOKEN` are not set
+6. Run Databricks pipeline (gracefully skips if `DATABRICKS_HOST`/`DATABRICKS_TOKEN` are not set):
+   - **`bronze_to_silver`** — reads raw CSV from GCS Bronze bucket; casts types, drops invalid rows, removes delay outliers, deduplicates on `flight_id`; writes Delta table `silver_flights`
+   - **`silver_to_gold`** — reads `silver_flights`; computes four aggregations (by airline, by route, by day, on-time %); writes Delta table `gold_flight_summary`
+   - **`export_tables_to_gcs`** — reads both Delta tables; writes flat Parquet to Silver and Gold GCS buckets (no `partitionBy`, so all columns including `summary_type` appear in the BigQuery schema)
 
 ---
 
