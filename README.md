@@ -25,6 +25,7 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 - [CI/CD Workflows](#cicd-workflows)
 - [End-to-End Runtime Sequence](#end-to-end-runtime-sequence)
 - [Quick Start / Testing](#quick-start--testing)
+- [AI Guardrails](#ai-guardrails)
 - [Prerequisites & Secrets](#prerequisites--secrets)
 - [Configuration Variables](#configuration-variables)
 
@@ -566,6 +567,95 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
   -H "Content-Type: application/json" \
   -d '{"question": "For those routes, which airline handles it best?", "session_id": "my-session"}'
+```
+
+---
+
+## AI Guardrails
+
+Three layers of protection are active on every request.
+
+| Guardrail | Where | What it does |
+|-----------|-------|-------------|
+| **Input validation** | `/retrieve` and `/agent` handlers | Rejects malformed input before any GCP call is made |
+| **Gemini safety settings** | `reason_with_vertex()` | Blocks harmful content at `BLOCK_MEDIUM_AND_ABOVE` for dangerous content, hate speech, harassment, and sexually explicit categories |
+| **Parameterized BigQuery** | All BQ queries in `retrieval_service.py` and `agent.py` | `@days_back`, `@airline`, `@route` — prevents SQL injection via LLM-supplied or user-supplied values |
+
+### Input validation rules
+
+| Parameter | Rule | Error |
+|-----------|------|-------|
+| `question` | Required; max 500 characters | `400` |
+| `session_id` | Letters, digits, hyphens, underscores only; max 64 chars | `400` |
+| `airline` | 2–3 uppercase IATA code, e.g. `AA` | `400` |
+| `route` | `ORIGIN-DEST` with 3-letter codes, e.g. `ATL-LAX` | `400` |
+| `days_back` | Integer 1–30 | `400` |
+| `top_k` | Integer 1–20 | `400` |
+
+### Testing guardrails
+
+**Happy path — valid `/retrieve` with all filters:**
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What are the weather delay trends for Delta?", "session_id": "demo-1", "airline": "DL", "days_back": 7, "top_k": 5}'
+# → {"answer": "...", "context_count": 5, ...}
+```
+
+**Question too long (> 500 chars):**
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"question": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "session_id": "demo-1"}'
+# → {"error": "'question' must be 500 characters or fewer"} HTTP 400
+```
+
+**Invalid session_id (contains a space):**
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Show me delay trends", "session_id": "my session"}'
+# → {"error": "'session_id' must contain only letters, digits, hyphens, or underscores (max 64 chars)"} HTTP 400
+```
+
+**Invalid airline code (lowercase / too long):**
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Show me delay trends", "airline": "delta"}'
+# → {"error": "'airline' must be a 2–3 character IATA code (e.g. '\''AA'\'')"} HTTP 400
+```
+
+**Invalid route format:**
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Route risk", "route": "Atlanta to LA"}'
+# → {"error": "'route' must be ORIGIN-DEST with 3-letter codes (e.g. 'ATL-LAX')"} HTTP 400
+```
+
+**`days_back` out of range:**
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Show me delay trends", "days_back": 90}'
+# → {"error": "'days_back' must be between 1 and 30"} HTTP 400
+```
+
+**Valid `/agent` query:**
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Which airline has the worst on-time performance this week?", "session_id": "demo-guardrails"}'
+# → {"answer": "...", "tools_called": ["query_analytics"], "steps": 3, ...}
+```
+
+**Invalid session_id on `/agent`:**
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Show me delay trends", "session_id": "bad session!"}'
+# → {"error": "'session_id' must contain only letters, digits, hyphens, or underscores (max 64 chars)"} HTTP 400
 ```
 
 ---
