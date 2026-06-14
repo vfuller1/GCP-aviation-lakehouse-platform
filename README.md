@@ -326,6 +326,20 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
 
 Conversation history is stored in **Firestore** (`rag-sessions` database). Both `/retrieve` and `/agent` append each Q&A turn to `sessions/{session_id}`, enabling follow-up questions that reference prior answers. Sessions expire automatically after 1 hour (TTL on `expireAt`). Pass the same `session_id` across calls to maintain context.
 
+Each session document also accumulates a running `token_usage` sub-document across all turns:
+```json
+{
+  "turns": [...],
+  "token_usage": {
+    "prompt_tokens":   9340,
+    "response_tokens": 1821,
+    "total_tokens":    11161,
+    "request_count":   5
+  },
+  "expireAt": "2026-06-13T13:00:00Z"
+}
+```
+
 ---
 
 ## End-to-End Request Flows
@@ -349,7 +363,7 @@ Client             Cloud Run          Firestore       Vertex AI      Vector Sear
   │                    ├──question + context + session history──────────────────────────────────────────►│
   │                    │◄──grounded answer─────────────────────────────────────────────────────────────  │
   │                    ├──save Q&A turn──►│               │                │               │              │
-  │◄──{answer, context_count, facts_count, history_turns}─┤                │               │              │
+  │◄──{answer, context_count, facts_count, history_turns, token_usage}──────┤               │              │
 ```
 
 ### /agent — LangGraph Autonomous Loop
@@ -375,7 +389,7 @@ Client            Cloud Run        Firestore      LangGraph StateGraph          
   │                   │                │   └──────────────┤◄─answer (no tool_calls)────────────────────────── │
   │                   │◄──final state──────────────────── │                               │                   │
   │                   ├──save Q&A turn►│                  │                               │                   │
-  │◄──{answer, tools_called, steps}────┤                  │                               │                   │
+  │◄──{answer, tools_called, steps, token_usage}──────────┤                               │                   │
 ```
 
 **Key difference**: `/retrieve` always makes exactly 1 vector search + 1 BigQuery call. `/agent` makes 1–N tool calls chosen at runtime — the `tools_called` array in the response shows exactly what ran.
@@ -444,9 +458,12 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
   "session_id":   "demo-agent-1",
   "tools_called": ["query_analytics", "search_flight_records"],
   "steps":        5,
+  "token_usage":  {"prompt_tokens": 2841, "response_tokens": 418, "total_tokens": 3259},
   "timestamp":    "2026-06-13T12:00:00Z"
 }
 ```
+
+> **Agent token note**: `token_usage` sums across every Gemini call in the loop — each tool-call decision and the final synthesis step. A 5-step agent run with 2 tool calls will show the combined token spend for all 3 Gemini invocations.
 
 ### /retrieve vs /agent
 
@@ -573,13 +590,50 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 
 ## AI Guardrails
 
-Three layers of protection are active on every request.
+Three security layers and one observability layer are active on every request.
 
-| Guardrail | Where | What it does |
-|-----------|-------|-------------|
+| Layer | Where | What it does |
+|-------|-------|-------------|
 | **Input validation** | `/retrieve` and `/agent` handlers | Rejects malformed input before any GCP call is made |
 | **Gemini safety settings** | `reason_with_vertex()` | Blocks harmful content at `BLOCK_MEDIUM_AND_ABOVE` for dangerous content, hate speech, harassment, and sexually explicit categories |
 | **Parameterized BigQuery** | All BQ queries in `retrieval_service.py` and `agent.py` | `@days_back`, `@airline`, `@route` — prevents SQL injection via LLM-supplied or user-supplied values |
+| **Prompt injection defence** | `build_reasoning_prompt()`, agent system prompt, `search_flight_records` | XML-delimited prompt sections + `_sanitise_context()` regex strips instruction-override patterns from all retrieved content |
+| **Token usage monitoring** | `reason_with_vertex()`, `/agent` handler, `append_session_turn()` | Logs, returns in response, and accumulates per-session in Firestore |
+
+### Token Usage Monitoring
+
+Token counts are captured from `response.usage_metadata` on every Gemini call and surfaced at three levels:
+
+**Level 1 — Cloud Logging** (every request):
+```
+Token usage — prompt: 1842, response: 312, total: 2154
+```
+Visible in GCP Console → Cloud Run → `aviation-retrieval` → Logs. Queryable with Log Explorer for cost trend analysis.
+
+**Level 2 — API response** (every `/retrieve` and `/agent` call):
+```bash
+curl -s -X POST .../retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Which routes have the highest weather delays?", "session_id": "demo-1"}' \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['answer']); print('Tokens:', d['token_usage'])"
+# Tokens: {'prompt_tokens': 1842, 'response_tokens': 312, 'total_tokens': 2154}
+```
+The `/agent` response sums token spend across all Gemini invocations in the reasoning loop.
+
+**Level 3 — Firestore session accumulation** (per `session_id`):
+
+GCP Console → Firestore → `rag-sessions` → `sessions` → click any session document:
+```json
+{
+  "token_usage": {
+    "prompt_tokens":   9340,
+    "response_tokens": 1821,
+    "total_tokens":    11161,
+    "request_count":   5
+  }
+}
+```
+Provides per-user / per-session cost attribution across the full conversation lifetime without any external tracking infrastructure.
 
 ### Input validation rules
 
