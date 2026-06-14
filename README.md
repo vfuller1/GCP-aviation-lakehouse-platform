@@ -1,5 +1,7 @@
 # GCP Aviation Lakehouse Platform
 
+![GCP Aviation Lakehouse Platform](images/intro%20picture%20for%20the%20readme.png)
+
 A fully automated, cloud-native data lakehouse built on Google Cloud Platform that ingests synthetic aviation flight data, applies medallion-architecture transformations, and surfaces analytics through two AI layers — a **Gemini-powered RAG retrieval service** (`/retrieve`) and a **LangGraph agentic reasoning loop** (`/agent`) — all triggered from a single `git push`.
 
 ---
@@ -33,63 +35,7 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 
 ## Architecture Overview
 
-```
-GitHub push
-    │
-    ├─[infra.yml]──► Terraform ──► GCS · BigQuery · GKE · Vertex AI · Vector Search
-    │                               Cloud Run · Firestore · Artifact Registry
-    │
-    └─[pipeline.yml]─► Docker build/push
-                              │
-                    ┌─────────▼──────────────────────────────────────┐
-                    │  BRONZE  gs://.../bronze/  raw CSV              │
-                    │  GKE CronJob: ingest.py (5,000 flights/day)     │
-                    │  Vertex AI text-embedding-005                   │
-                    │  → ai_rag_documents (BigQuery native table)     │
-                    └─────────┬──────────────────────────────────────┘
-                              │
-                    Databricks: bronze_to_silver.py
-                    ├── Cast strings → INT / BOOL / TIMESTAMP
-                    ├── Drop rows missing flight_id / airline / origin / dest
-                    ├── Remove delay outliers (< −60 or > 600 min)
-                    └── Deduplicate on flight_id
-                              │
-                    ┌─────────▼──────────────────────────────────────┐
-                    │  SILVER  gs://.../silver/  Parquet (flat)       │
-                    │  Delta table: silver_flights                    │
-                    │  Cleaned · validated · deduplicated flights     │
-                    └─────────┬──────────────────────────────────────┘
-                              │
-                    Databricks: silver_to_gold.py
-                    ├── Aggregate by airline  → avg delay, total flights
-                    ├── Aggregate by route    → ORIGIN-DEST KPIs
-                    ├── Aggregate by day      → delayed count, weather count
-                    └── On-time % per airline
-                              │
-                    ┌─────────▼──────────────────────────────────────┐
-                    │  GOLD    gs://.../gold/    Parquet (flat)       │
-                    │  Delta table: gold_flight_summary               │
-                    │  Business KPIs · rankings · daily trends        │
-                    └─────────┬──────────────────────────────────────┘
-                              │
-                    Databricks: export_tables_to_gcs.py
-                    Flat Parquet write (no partitionBy) so summary_type
-                    and all partition columns appear as BigQuery columns
-                              │
-                    ┌─────────▼──────────────────────────────────────┐
-                    │  BigQuery: aviation_analytics dataset           │
-                    │  silver_flights_ext · gold_summary_ext          │
-                    │  BI views: airline perf · routes · delays       │
-                    │  AI views: route risk · delay explanations      │
-                    └─────────┬──────────────────────────────────────┘
-                              │
-              Cloud Run: aviation-retrieval (Flask + Gemini 2.5 Flash)
-                        │                         │
-                 /retrieve (RAG)          /agent (LangGraph)
-                        └──────────┬──────────────┘
-                           Firestore: rag-sessions
-                           (session_id → Q&A turns, 1-hr TTL)
-```
+![Architecture Overview](images/Architecture%20Overview.png)
 
 The platform follows the **Medallion Architecture** (Bronze / Silver / Gold):
 
@@ -199,6 +145,8 @@ A `aviation_analytics` BigQuery dataset is always created. Once Parquet files ar
 ---
 
 ## Data Pipeline
+
+![Data Pipeline Stages](images/AI%20Layer%20Request%20Flows-RAG%20vs.%20Agent.png)
 
 ### Stage 1 — Ingest (Source → Bronze)
 
@@ -344,53 +292,7 @@ Each session document also accumulates a running `token_usage` sub-document acro
 
 ## End-to-End Request Flows
 
-### /retrieve — Fixed RAG Pipeline
-
-Every request follows the same six steps in the same order.
-
-```
-Client             Cloud Run          Firestore       Vertex AI      Vector Search    BigQuery        Gemini
-  │                    │                  │               │                │               │              │
-  ├──POST /retrieve───►│                  │               │                │               │              │
-  │                    ├──load session───►│               │                │               │              │
-  │                    │◄──prior turns────┤               │                │               │              │
-  │                    ├──embed question───────────────►  │                │               │              │
-  │                    │◄──768-dim vector──────────────   │                │               │              │
-  │                    ├──find top-K neighbours──────────────────────────►│               │              │
-  │                    │◄──matching doc IDs + scores────────────────────── │               │              │
-  │                    ├──fetch RAG docs + analytics facts──────────────────────────────►  │              │
-  │                    │◄──context rows──────────────────────────────────────────────── │  │              │
-  │                    ├──question + context + session history──────────────────────────────────────────►│
-  │                    │◄──grounded answer─────────────────────────────────────────────────────────────  │
-  │                    ├──save Q&A turn──►│               │                │               │              │
-  │◄──{answer, context_count, facts_count, history_turns, token_usage}──────┤               │              │
-```
-
-### /agent — LangGraph Autonomous Loop
-
-The agent decides which tools to call and loops until it has enough evidence. Tool calls and loop count vary by question.
-
-```
-Client            Cloud Run        Firestore      LangGraph StateGraph          BigQuery / Vector Search    Gemini
-  │                   │                │                  │                               │                   │
-  ├──POST /agent─────►│                │                  │                               │                   │
-  │                   ├──load session─►│                  │                               │                   │
-  │                   │◄──prior turns──┤                  │                               │                   │
-  │                   ├──invoke(SystemMessage + history + question)────────────────────►  │                   │
-  │                   │                │   ┌──────────────┤                               │                   │
-  │                   │                │   │  agent node ─┼──prompt──────────────────────────────────────────►│
-  │                   │                │   │              │◄─tool_calls───────────────────────────────────────┤
-  │                   │                │   │  tool node   │                               │                   │
-  │                   │                │   │  (per call)  ├──query_analytics / search / status──────────────►│
-  │                   │                │   │              │◄──results────────────────────────────────────────  │
-  │                   │                │   │  agent node ◄┤ (results appended to messages)│                   │
-  │                   │                │   │  (loop repeats until Gemini returns no tool_calls)               │
-  │                   │                │   │  agent node ─┼──final prompt───────────────────────────────────►│
-  │                   │                │   └──────────────┤◄─answer (no tool_calls)────────────────────────── │
-  │                   │◄──final state──────────────────── │                               │                   │
-  │                   ├──save Q&A turn►│                  │                               │                   │
-  │◄──{answer, tools_called, steps, token_usage}──────────┤                               │                   │
-```
+![AI Layer Request Flows — /retrieve vs /agent](images/AI%20Layer%20Request%20Flows%20-%20RAG%20vs.%20Agent.jpg)
 
 **Key difference**: `/retrieve` always makes exactly 1 vector search + 1 BigQuery call. `/agent` makes 1–N tool calls chosen at runtime — the `tools_called` array in the response shows exactly what ran.
 
@@ -404,29 +306,7 @@ The `/agent` endpoint wraps the same GCP tools in a **LangGraph `StateGraph`** �
 
 ### Architecture
 
-```
-POST /agent
-    │
-    ▼
-SystemMessage + session history + question
-    │
-    ▼
-┌──────────────────────────────────────────────────────┐
-│  LangGraph StateGraph                                │
-│                                                      │
-│  ┌─────────┐    tool_calls?     ┌──────────────┐   │
-│  │  agent  │ ─── yes ────────► │  tool_node   │   │
-│  │(Gemini) │ ◄── results ────  │              │   │
-│  └─────────┘                   │  • search_flight_records  │
-│       │                        │  • query_analytics        │
-│       │ no tool_calls          │  • get_pipeline_status    │
-│       ▼                        └──────────────┘   │
-│     END                                            │
-└──────────────────────────────────────────────────────┘
-    │
-    ▼
-Grounded answer + tools_called list + step count
-```
+![Agentic Layer — LangGraph StateGraph](images/Agentic%20Layer%20-LangGraph.png)
 
 ### Tools
 
@@ -637,6 +517,8 @@ GCP Console → Firestore → `rag-sessions` → `sessions` → click any sessio
 ```
 Provides per-user / per-session cost attribution across the full conversation lifetime without any external tracking infrastructure.
 
+![Firestore token_usage — live session document](images/Monitor%20Tokens.jpg)
+
 ### Input validation rules
 
 | Parameter | Rule | Error |
@@ -755,6 +637,8 @@ In `infra.yml`, `enable_gke` and `enable_vertex_ai` are both set to `"true"` via
 
 ## BigQuery Views Reference
 
+![BigQuery Views and Analytics Schema](images/BigQuery%20Views%20and%20Analytics%20Schema.jpg)
+
 All views live in the `aviation_analytics` dataset.
 
 ### BI Views (query `gold_summary_ext`)
@@ -773,6 +657,10 @@ All views live in the `aviation_analytics` dataset.
 | `ai_delay_explanations_v` | Gemini-generated delay explanations for each flight event |
 | `ai_route_risk_v` | Route-level risk scores and reasoning |
 | `ai_nl_analytics_facts_v` | Natural-language analytics facts extracted during ingest |
+
+### BI Dashboard (Looker Studio)
+
+![Looker Studio — Flight Risk Dashboard](images/Looker%20studio.png)
 
 ---
 
