@@ -398,7 +398,9 @@ Client            Cloud Run        Firestore      LangGraph StateGraph          
 
 ## Agentic Layer (LangGraph)
 
-The `/agent` endpoint wraps the same GCP tools in a **LangGraph reasoning loop** — instead of a fixed embed → search → generate sequence, the agent decides autonomously which tools to call and in what order until it has enough evidence to answer.
+**LangGraph** is an open-source framework from LangChain for building stateful, multi-step AI agents. Instead of a hard-coded function call sequence, you define a graph of nodes (the LLM, tool executors) and edges (conditional routing logic). LangGraph manages the message state between steps, handles the tool-call loop automatically, and gives you a compiled graph object you invoke like a function. This makes it straightforward to build agents that can reason across multiple data sources, retry with different parameters when a first call returns nothing, and stop only when the model decides it has enough evidence — without writing the loop logic yourself.
+
+The `/agent` endpoint wraps the same GCP tools in a **LangGraph `StateGraph`** — instead of a fixed embed → search → generate sequence, the agent decides autonomously which tools to call and in what order until it has enough evidence to answer.
 
 ### Architecture
 
