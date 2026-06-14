@@ -1,6 +1,6 @@
 # GCP Aviation Lakehouse Platform
 
-![GCP Aviation Lakehouse Platform](images/intro%20picture%20for%20the%20readme.png)
+![GCP Aviation Lakehouse Platform](images/intro%20picture%20for%20the%20readme2.jpg)
 
 A fully automated, cloud-native data lakehouse built on Google Cloud Platform that ingests synthetic aviation flight data, applies medallion-architecture transformations, and surfaces analytics through two AI layers — a **Gemini-powered RAG retrieval service** (`/retrieve`) and a **LangGraph agentic reasoning loop** (`/agent`) — all triggered from a single `git push`.
 
