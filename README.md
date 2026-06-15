@@ -146,7 +146,7 @@ A `aviation_analytics` BigQuery dataset is always created. Once Parquet files ar
 
 ## Data Pipeline
 
-![Data Pipeline Stages](images/AI%20Layer%20Request%20Flows-RAG%20vs.%20Agent.png)
+![Data Pipeline Stages](images/Medallion%20Data%20Pipeline%20Stages.png)
 
 ### Stage 1 — Ingest (Source → Bronze)
 
@@ -294,7 +294,7 @@ Each session document also accumulates a running `token_usage` sub-document acro
 
 ![AI Layer Request Flows — /retrieve vs /agent](images/AI%20Layer%20Request%20Flows%20-%20RAG%20vs.%20Agent.jpg)
 
-**Key difference**: `/retrieve` always makes exactly 1 vector search + 1 BigQuery call. `/agent` makes 1–N tool calls chosen at runtime — the `tools_called` array in the response shows exactly what ran.
+**Key difference**: `/retrieve` embeds the question, queries Vector Search, and only calls BigQuery if Vector Search returns fewer than 3 results. `/agent` makes 1–N tool calls chosen at runtime — the `tools_called` array in the response shows exactly what ran.
 
 ---
 
@@ -351,8 +351,8 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 
 | | `/retrieve` | `/agent` |
 |---|---|---|
-| Flow | Fixed: embed → vector search → BQ → Gemini | Autonomous: agent decides tools + order |
-| Tool calls | Always 1 vector search + 1 BQ query | 1–N calls based on question complexity |
+| Flow | Fixed: embed → vector search → Gemini (BQ fallback if VS < 3 results) | Autonomous: agent decides tools + order |
+| Tool calls | 1 vector search + conditional BQ query | 1–N calls based on question complexity |
 | Multi-step reasoning | No | Yes — can refine query if first call is empty |
 | Latency | Lower (~2–4 s) | Higher (~4–10 s depending on steps) |
 | Best for | High-volume, well-scoped questions | Complex, multi-faceted or exploratory questions |
@@ -472,7 +472,7 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 
 ## AI Guardrails
 
-Three security layers and one observability layer are active on every request.
+Five guardrail layers are active on every request.
 
 | Layer | Where | What it does |
 |-------|-------|-------------|
