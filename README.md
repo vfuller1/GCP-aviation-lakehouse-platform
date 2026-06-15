@@ -148,6 +148,45 @@ A `aviation_analytics` BigQuery dataset is always created. Once Parquet files ar
 
 ![Data Pipeline Stages](images/Medallion%20Data%20Pipeline%20Stages.png)
 
+```
+pipeline.yml  (Databricks Job Trigger)
+      │
+      ├──────────────────────────────────────────────────────────┐
+      │                                                          │
+      ▼                                                          │
+ ┌─────────────────┐                                            │
+ │     BRONZE       │  GKE Autopilot Ingest Job                 │
+ │   (Raw CSV)      │  gs://{project}-bronze/aviation/raw/      │
+ └────────┬─────────┘                                            │
+          │  Databricks: bronze_to_silver.py                     │
+          │  Reads Bronze CSV → cleans, deduplicates             │
+          ▼                                                       │
+ ┌─────────────────┐                                            │
+ │     SILVER       │  Delta table: workspace.aviation.silver_flights
+ │  (Cleaned Delta) │                                            │
+ └────────┬─────────┘                                            │
+          │  Databricks: silver_to_gold.py                       │
+          │  Computes 4 business aggregations                    │
+          ▼                                                       │
+ ┌─────────────────┐                                            │
+ │      GOLD        │  Delta table: workspace.aviation.gold_flight_summary
+ │ (Business KPIs)  │                                            │
+ └────────┬─────────┘                                            │
+          │  Databricks: export_tables_to_gcs.py                 │
+          │  Reads Silver + Gold Delta → writes flat Parquet     │
+          ▼                                                       │
+ ┌──────────────────────────────────────────────┐               │
+ │  EXPORT  (GCS Parquet — no partitionBy)       │               │
+ │  gs://{project}-silver/aviation/cleaned/      │               │
+ │  gs://{project}-gold/aviation/aggregated/     │               │
+ └──────────────────────────────────────────────┘               │
+          │                                                       │
+          ▼                                                       │
+ BigQuery External Tables                                        │
+ silver_flights_ext  ·  gold_summary_ext                         │
+ BI Views + AI fallback views  ◄──────────────────────────────── ┘
+```
+
 ### Stage 1 — Ingest (Source → Bronze)
 
 **Component**: `pipeline/ingest/ingest.py`  
