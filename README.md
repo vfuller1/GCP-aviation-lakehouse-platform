@@ -87,6 +87,7 @@ The platform follows the **Medallion Architecture** (Bronze / Silver / Gold):
 ├── imports.tf                         # Terraform import blocks for existing resources
 ├── provider.tf                        # GCP Terraform provider
 ├── retrieval_service.tf               # Cloud Run retrieval service + IAM
+├── security.tf                        # Cloud Armor WAF (5 OWASP rules) + IAM Audit Logging
 ├── storage.tf                         # GCS medallion bucket definitions
 ├── variables.tf                       # Input variable declarations
 ├── vector_search.tf                   # Vertex AI Vector Search index + endpoint
@@ -288,7 +289,8 @@ A Flask application deployed on **Cloud Run** (`aviation-retrieval`) implements 
 
 1. Embed the user question using `text-embedding-005`
 2. Query Vector Search for the top-K nearest neighbours
-3. Fetch the matching RAG documents from BigQuery
+3. **If VS returns ≥ 3 results** → use those as context (BigQuery skipped)  
+   **If VS returns < 3 results** → query BigQuery `ai_rag_documents` as fallback
 4. Send the retrieved context + question to **Gemini 2.5 Flash**
 5. Return the structured answer
 
