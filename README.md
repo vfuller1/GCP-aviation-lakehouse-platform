@@ -363,40 +363,131 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 
 ### infra.yml — Terraform Apply
 
-![infra.yml — Terraform Apply Workflow](images/infra_terraform_apply.png)
+**Trigger**: push to `main` touching `**.tf`  |  `workflow_dispatch`
 
-**Trigger**: Push to `main` touching any `.tf` file or `infra.yml`; also `workflow_dispatch`.
-
-**Steps**:
-1. Checkout repo + Setup Terraform v1.6.6
-2. Authenticate to GCP (`GCP_SA_KEY`)
-3. Enable 7 prerequisite GCP APIs
-4. `terraform init -upgrade` (3-attempt retry loop, 15s between retries)
-5. `terraform plan` (-lock-timeout=15m)
-6. Wait for `retrieval:latest` image tag in Artifact Registry (polls every 10s, max 5 min)
-7. Drop BigQuery external tables (pre-apply — external only, no GCS data deleted)
-8. `terraform apply` (-auto-approve, -lock-timeout=15m)
-9. Force Cloud Run revision to `retrieval:latest`, migrate 100% traffic
-10. Verify AI BigQuery objects (4 objects checked)
-11. Verify Cloud Run service + report Vector Search index status
-12. Run E2E smoke tests against live Cloud Run endpoint
-
-> The `--upgrade` flag ensures provider versions are re-resolved without relying on a committed lock file.
+```
+Git Push (**.tf changed)  ──or──  workflow_dispatch
+                   │
+                   ▼
+     Checkout  +  Setup Terraform v1.6.6
+                   │
+                   ▼
+     Authenticate to GCP  (GCP_SA_KEY)
+                   │
+                   ▼
+     Enable 7 GCP APIs
+     cloudresourcemanager · iam · container
+     artifactregistry · aiplatform · firestore · run
+                   │
+                   ▼
+     Terraform Init  (-upgrade, 3-attempt retry, 15s backoff)
+                   │
+                   ▼
+     Terraform Plan  (-lock-timeout=15m)
+                   │
+                   ▼
+     Wait for retrieval:latest in Artifact Registry
+     (polls every 10s · max 30 attempts · fails if not found)
+                   │
+                   ▼
+     Drop BQ External Tables  (pre-apply safety step)
+     silver_flights_ext  +  gold_summary_ext
+     ── external only, no GCS data deleted ──
+                   │
+                   ▼
+     ┌─────────────────────────────────────────────┐
+     │         Terraform Apply  (-auto-approve)     │
+     │                                             │
+     │  GCS buckets          bronze/silver/gold/AI │
+     │  BigQuery             dataset + views       │
+     │  GKE Autopilot        aviation-pipeline     │
+     │  Artifact Registry    aviation-pipeline     │
+     │  Cloud Run            aviation-retrieval    │
+     │  Firestore            rag-sessions          │
+     │  Vertex AI            Vector Search index   │
+     │  Cloud Armor WAF      5 OWASP rules         │
+     │  IAM + Workload Identity                    │
+     │  IAM Audit Logging    BQ + GCS              │
+     └─────────────────────────────────────────────┘
+                   │
+                   ▼
+     Force Cloud Run revision → retrieval:latest
+     migrate 100% traffic to new revision
+                   │
+                   ▼
+     Verify AI BigQuery objects
+     ai_delay_explanations_v · ai_route_risk_v
+     ai_nl_analytics_facts_v · ai_rag_documents
+                   │
+                   ▼
+     Verify Cloud Run URL  +  Report Vector Search status
+     (index vector count · endpoint public URL)
+                   │
+                   ▼
+     E2E Smoke Tests  (tests/test_retrieval_e2e.py · --timeout 45s)
+                   │
+                   ▼
+            Pipeline PASSED ✓
+```
 
 ### pipeline.yml — Build, Push & Deploy
 
-**Trigger**: Push to `main` touching `pipeline/**`, `retrieval_service/**`, `k8s/**`, or `pipeline.yml`; also `workflow_dispatch` with optional `run_ingest_now` boolean.
+**Trigger**: push to `main` touching `pipeline/**` `retrieval_service/**` `k8s/**`  |  `workflow_dispatch`
 
-**Steps**:
-1. Authenticate to GCP
-2. Build + push ingest Docker image to Artifact Registry
-3. Build + push retrieval service Docker image and deploy to Cloud Run
-4. Apply K8s manifests and update CronJob image to new commit SHA
-5. Trigger one-off ingest job (on every push or when `run_ingest_now=true`)
-6. Run Databricks pipeline (gracefully skips if `DATABRICKS_HOST`/`DATABRICKS_TOKEN` are not set):
-   - **`bronze_to_silver`** — reads raw CSV from GCS Bronze bucket; casts types, drops invalid rows, removes delay outliers, deduplicates on `flight_id`; writes Delta table `silver_flights`
-   - **`silver_to_gold`** — reads `silver_flights`; computes four aggregations (by airline, by route, by day, on-time %); writes Delta table `gold_flight_summary`
-   - **`export_tables_to_gcs`** — reads both Delta tables; writes flat Parquet to Silver and Gold GCS buckets (no `partitionBy`, so all columns including `summary_type` appear in the BigQuery schema)
+```
+Git Push (pipeline / retrieval_service / k8s)  ──or──  workflow_dispatch
+                        │
+                        ▼
+          Checkout  +  Authenticate to GCP
+                        │
+              ┌─────────┴─────────┐
+              ▼                   ▼
+   Build ingest image      Build retrieval image
+   pipeline/ingest/        retrieval_service/
+              │                   │
+              ▼                   ▼
+   Push ingest:sha        Push retrieval:sha
+   Push ingest:latest     Push retrieval:latest
+   → Artifact Registry    → Artifact Registry
+              │                   │
+              └─────────┬─────────┘
+                        │
+                        ▼
+          Deploy retrieval → Cloud Run
+          aviation-retrieval · migrate traffic to latest
+                        │
+                        ▼
+          Get GKE credentials
+                        │
+                        ▼
+          Apply K8s manifests
+          namespace · service-account · ingest-cronjob
+                        │
+                        ▼
+          Update CronJob image → new commit SHA
+                        │
+                        ▼
+          Run one-time ingest job  (every push)
+          waits for completion · max 10 min
+          → 5,000 records → Bronze GCS (CSV)
+          → Embeddings → BigQuery ai_rag_documents
+          → GCS batch.json → Vector Search index trigger
+                        │
+                        ▼
+          Verify AI RAG data freshness + embeddings
+          (total_docs · docs_with_embeddings · fresh_docs_24h)
+                        │
+                        ▼
+          Databricks pipeline  (skips if secrets not set)
+          │
+          ├── bronze_to_silver   Raw CSV → cleaned Delta silver_flights
+          ├── silver_to_gold     Aggregations → Delta gold_flight_summary
+          └── export_to_gcs      Flat Parquet → GCS Silver + Gold buckets
+                                 BigQuery external tables now query-ready
+                        │
+                        ▼
+               Pipeline PASSED ✓
+```
 
 ---
 
