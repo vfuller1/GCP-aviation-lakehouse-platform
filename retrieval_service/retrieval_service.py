@@ -595,14 +595,25 @@ def retrieve():
         if query_vector:
             context_docs = search_vector_index(query_vector, top_k=top_k)
         logger.info(f"Retrieved {len(context_docs)} documents from Vector Search")
-        
-        # 3. Query BigQuery for deterministic facts
-        # Infer query type from question keywords
+
+        # 3. Query BigQuery for deterministic facts — only when Vector Search
+        # returns fewer than 3 results (index rebuilding, cold start, or sparse).
+        # When Vector Search is healthy (3+ results) skip BigQuery to reduce
+        # latency and token cost.
         query_type = "generic"
         if any(word in question.lower() for word in ["risk", "disruption", "delay"]):
             query_type = "route_risk" if "route" in question.lower() else "airline"
-        
-        facts = query_bigquery_fallback(query_type, airline=airline, route=route, days_back=days_back)
+
+        facts: List[Dict[str, Any]] = []
+        if len(context_docs) < 3:
+            logger.info(
+                f"Vector Search returned {len(context_docs)} results (<3) — querying BigQuery fallback"
+            )
+            facts = query_bigquery_fallback(query_type, airline=airline, route=route, days_back=days_back)
+        else:
+            logger.info(
+                f"Vector Search healthy ({len(context_docs)} results) — skipping BigQuery fallback"
+            )
         logger.info(f"Retrieved {len(facts)} fact rows from BigQuery")
         
         # 4. Build reasoning prompt (with history)
