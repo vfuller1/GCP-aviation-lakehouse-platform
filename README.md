@@ -363,14 +363,23 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 
 ### infra.yml — Terraform Apply
 
+![infra.yml — Terraform Apply Workflow](images/infra_terraform_apply.png)
+
 **Trigger**: Push to `main` touching any `.tf` file or `infra.yml`; also `workflow_dispatch`.
 
 **Steps**:
-1. Authenticate to GCP (`GCP_SA_KEY`)
-2. Enable prerequisite APIs
-3. Drop BigQuery external tables (pre-apply, to allow schema changes)
-4. `terraform init -upgrade` (3-attempt retry loop)
-5. `terraform plan` → `terraform apply`
+1. Checkout repo + Setup Terraform v1.6.6
+2. Authenticate to GCP (`GCP_SA_KEY`)
+3. Enable 7 prerequisite GCP APIs
+4. `terraform init -upgrade` (3-attempt retry loop, 15s between retries)
+5. `terraform plan` (-lock-timeout=15m)
+6. Wait for `retrieval:latest` image tag in Artifact Registry (polls every 10s, max 5 min)
+7. Drop BigQuery external tables (pre-apply — external only, no GCS data deleted)
+8. `terraform apply` (-auto-approve, -lock-timeout=15m)
+9. Force Cloud Run revision to `retrieval:latest`, migrate 100% traffic
+10. Verify AI BigQuery objects (4 objects checked)
+11. Verify Cloud Run service + report Vector Search index status
+12. Run E2E smoke tests against live Cloud Run endpoint
 
 > The `--upgrade` flag ensures provider versions are re-resolved without relying on a committed lock file.
 
