@@ -42,8 +42,8 @@ The platform follows the **Medallion Architecture** (Bronze / Silver / Gold):
 | Layer | Storage | Format | Contents |
 |-------|---------|--------|----------|
 | Bronze | `gcp-lakehouseproject-bronze` | CSV | Raw, unvalidated flight records — written by GKE ingest job |
-| Silver | `gcp-lakehouseproject-silver` | Parquet (flat) | Cleaned, validated, deduplicated — written by Databricks `bronze_to_silver` |
-| Gold | `gcp-lakehouseproject-gold` | Parquet (flat) | Business aggregations — written by Databricks `silver_to_gold` |
+| Silver | `gcp-lakehouseproject-silver` | Parquet (flat) | Cleaned, validated, deduplicated — exported to GCS by Databricks `export_tables_to_gcs` |
+| Gold | `gcp-lakehouseproject-gold` | Parquet (flat) | Business aggregations — exported to GCS by Databricks `export_tables_to_gcs` |
 | AI | `gcp-lakehouseproject-ai` | JSON embeddings | RAG documents + Vertex AI Vector Search index data |
 | BI | BigQuery `aviation_analytics` | External tables + Views | Dashboard-ready analytics over Silver/Gold Parquet |
 
