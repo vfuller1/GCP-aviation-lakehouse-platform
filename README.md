@@ -28,6 +28,7 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 - [End-to-End Runtime Sequence](#end-to-end-runtime-sequence)
 - [Quick Start / Testing](#quick-start--testing)
 - [AI Guardrails](#ai-guardrails)
+- [OWASP LLM Top 10 — Security Coverage](#owasp-llm-top-10--security-coverage)
 - [Monitoring Dashboard](#monitoring-dashboard)
 - [Prerequisites & Secrets](#prerequisites--secrets)
 - [Configuration Variables](#configuration-variables)
@@ -738,6 +739,27 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
   -d '{"question": "Show me delay trends", "session_id": "bad session!"}'
 # → {"error": "'session_id' must contain only letters, digits, hyphens, or underscores (max 64 chars)"} HTTP 400
 ```
+
+---
+
+## OWASP LLM Top 10 — Security Coverage
+
+Assessment of the platform against the [OWASP Top 10 for LLM Applications](https://owasp.org/www-project-top-10-for-large-language-model-applications/).
+
+| # | Vulnerability | Status | How it's covered |
+|---|---|---|---|
+| LLM01 | Prompt Injection | ✅ Strong | `_INJECTION_RE` regex strips override patterns from all retrieved content; XML-delimited prompt sections separate instructions from untrusted data; both `/retrieve` and `/agent` prompts explicitly instruct Gemini to ignore instructions inside retrieved sections |
+| LLM02 | Insecure Output Handling | ⚠️ Partial | Responses returned as JSON (not rendered as HTML by this service); no HTML escaping of answer text — downstream clients must escape before rendering |
+| LLM03 | Training Data Poisoning | ✅ Good | No fine-tuning or training — uses Google's hosted Gemini 2.5 Flash; RAG documents come from a deterministic synthetic ingest job; Databricks `bronze_to_silver` filters null, out-of-range, and duplicate records before anything enters the AI layer |
+| LLM04 | Model Denial of Service | ⚠️ Partial | Input size limits (question ≤ 500 chars, `days_back` 1–30, `top_k` 1–20); Cloud Armor WAF at the network edge; no per-IP rate limiting or per-session token budget |
+| LLM05 | Supply Chain Vulnerabilities | ⚠️ Partial | All LLM calls go to Google's managed Gemini API (vetted vendor); open-source dependencies (LangChain, VertexAI SDK, Flask) are well-known packages; no automated dependency vulnerability scanning in CI/CD |
+| LLM06 | Sensitive Information Disclosure | ✅ Strong | Fully synthetic dataset — no real PII; all BigQuery queries parameterized (`@airline`, `@route`, `@days_back`); Firestore sessions isolated by `session_id`; Gemini safety settings block harmful content; IAM Audit Logging on BigQuery + GCS |
+| LLM07 | Insecure Plugin Design | ✅ Strong | Agent exposes exactly 3 read-only tools (`search_flight_records`, `query_analytics`, `get_pipeline_status`); LLM-supplied values go through parameterized queries only; tool outputs sanitized by `_sanitise()` before re-entering the agent loop; no shell execution, file access, or arbitrary HTTP calls |
+| LLM08 | Excessive Agency | ✅ Strong | All agent tools are SELECT-only — no writes to any storage; Cloud Run SA has `roles/bigquery.dataViewer` + `roles/bigquery.jobUser` only; GKE SA has `roles/storage.objectCreator` on Bronze bucket only; LangGraph `ToolNode` limits the agent to the registered tool set |
+| LLM09 | Overreliance | ⚠️ Partial | Agent system prompt instructs Gemini to acknowledge synthetic data and narrow time windows; `get_pipeline_status` tool surfaces data freshness; every response includes `context_count` and `facts_count`; no explicit `data_synthetic` disclaimer field in every response |
+| LLM10 | Model Theft | ✅ Strong | No model weights in this project — uses Google's hosted Gemini API; Vector Search index stored in Vertex AI managed internal storage (not browsable); Cloud Armor WAF blocks enumeration and scraping patterns |
+
+**6 of 10 fully covered. The 4 partial gaps are low-risk for a demo platform and are documented trade-offs.**
 
 ---
 
