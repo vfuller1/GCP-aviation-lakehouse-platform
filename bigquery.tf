@@ -349,3 +349,55 @@ resource "google_bigquery_table" "ai_nl_analytics_facts_v" {
     SQL
   }
 }
+
+# ── Monitoring views ───────────────────────────────────────────────────────────
+# These views read from the Cloud Logging sink table created by monitoring.tf.
+# The sink auto-creates the table on the first matching log entry. If terraform
+# apply runs before any requests have been made, re-run apply once traffic starts.
+
+resource "google_bigquery_table" "monitoring_token_usage_v" {
+  dataset_id          = google_bigquery_dataset.analytics_layer.dataset_id
+  table_id            = "monitoring_token_usage_v"
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = <<-SQL
+      SELECT
+        timestamp,
+        TIMESTAMP_TRUNC(timestamp, HOUR)              AS hour,
+        jsonPayload.session_id                        AS session_id,
+        jsonPayload.endpoint                          AS endpoint,
+        CAST(jsonPayload.prompt_tokens   AS INT64)    AS prompt_tokens,
+        CAST(jsonPayload.response_tokens AS INT64)    AS response_tokens,
+        CAST(jsonPayload.total_tokens    AS INT64)    AS total_tokens
+      FROM `${var.project_id}.${google_bigquery_dataset.analytics_layer.dataset_id}.run_googleapis_com_stdout`
+      WHERE jsonPayload.event = 'token_usage'
+        AND _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+    SQL
+  }
+}
+
+resource "google_bigquery_table" "monitoring_guardrails_v" {
+  dataset_id          = google_bigquery_dataset.analytics_layer.dataset_id
+  table_id            = "monitoring_guardrails_v"
+  deletion_protection = false
+
+  view {
+    use_legacy_sql = false
+    query          = <<-SQL
+      SELECT
+        timestamp,
+        TIMESTAMP_TRUNC(timestamp, HOUR)              AS hour,
+        jsonPayload.event                             AS event_type,
+        jsonPayload.guardrail_type                    AS guardrail_type,
+        jsonPayload.reason                            AS reason,
+        jsonPayload.session_id                        AS session_id,
+        CAST(jsonPayload.vs_results AS INT64)         AS vs_results,
+        severity
+      FROM `${var.project_id}.${google_bigquery_dataset.analytics_layer.dataset_id}.run_googleapis_com_stdout`
+      WHERE jsonPayload.event IN ('guardrail_triggered', 'bq_fallback')
+        AND _PARTITIONTIME >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+    SQL
+  }
+}

@@ -54,6 +54,12 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def _structured_log(event: str, severity: str = "INFO", **fields) -> None:
+    """Print a JSON log line to stdout. Cloud Run forwards it to Cloud Logging
+    as a structured entry; all fields land in jsonPayload.* in BigQuery."""
+    import sys
+    print(json.dumps({"severity": severity, "event": event, **fields}), flush=True, file=sys.stdout)
+
 app = Flask(__name__)
 
 # Load environment
@@ -577,8 +583,11 @@ def retrieve():
 
         err, status = _validate_input(question, session_id, airline, route, days_back, top_k)
         if err:
+            _structured_log("guardrail_triggered", severity="WARNING",
+                            guardrail_type="input_validation",
+                            reason=err, session_id=session_id or "anonymous")
             return jsonify({"error": err}), status
-        
+
         logger.info(f"Query: {question} (airline={airline}, route={route}, days_back={days_back}, session={session_id})")
 
         # Load conversation history for this session (if any)
@@ -609,6 +618,8 @@ def retrieve():
             logger.info(
                 f"Vector Search returned {len(context_docs)} results (<3) — querying BigQuery fallback"
             )
+            _structured_log("bq_fallback", vs_results=len(context_docs),
+                            session_id=session_id or "anonymous")
             facts = query_bigquery_fallback(query_type, airline=airline, route=route, days_back=days_back)
         else:
             logger.info(
@@ -621,6 +632,9 @@ def retrieve():
         
         # 5. Call Vertex Reasoning
         answer, token_usage = reason_with_vertex(prompt)
+        if token_usage:
+            _structured_log("token_usage", endpoint="/retrieve",
+                            session_id=session_id or "anonymous", **token_usage)
         if answer.startswith("Unable to generate model narrative"):
             answer = f"{answer} {build_fallback_answer(question, facts)}"
         logger.info(f"Generated answer: {answer[:100]}...")
@@ -734,6 +748,9 @@ def agent_query():
 
         err, status = _validate_input(question, session_id)
         if err:
+            _structured_log("guardrail_triggered", severity="WARNING",
+                            guardrail_type="input_validation",
+                            reason=err, session_id=session_id or "anonymous")
             return jsonify({"error": err}), status
 
         logger.info(f"Agent query: {question} (session={session_id})")
@@ -780,6 +797,9 @@ def agent_query():
             "Agent token usage — prompt: %d, response: %d, total: %d",
             token_usage["prompt_tokens"], token_usage["response_tokens"], token_usage["total_tokens"],
         )
+        if any(token_usage.values()):
+            _structured_log("token_usage", endpoint="/agent",
+                            session_id=session_id or "anonymous", **token_usage)
 
         if session_id:
             append_session_turn(session_id, question, answer, token_usage)

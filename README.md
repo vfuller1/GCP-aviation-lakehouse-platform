@@ -28,6 +28,7 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 - [End-to-End Runtime Sequence](#end-to-end-runtime-sequence)
 - [Quick Start / Testing](#quick-start--testing)
 - [AI Guardrails](#ai-guardrails)
+- [Monitoring Dashboard](#monitoring-dashboard)
 - [Prerequisites & Secrets](#prerequisites--secrets)
 - [Configuration Variables](#configuration-variables)
 
@@ -87,6 +88,7 @@ The platform follows the **Medallion Architecture** (Bronze / Silver / Gold):
 ├── imports.tf                         # Terraform import blocks for existing resources
 ├── provider.tf                        # GCP Terraform provider
 ├── retrieval_service.tf               # Cloud Run retrieval service + IAM
+├── monitoring.tf                      # Cloud Logging sink → BigQuery (token usage + guardrails)
 ├── security.tf                        # Cloud Armor WAF (5 OWASP rules) + IAM Audit Logging
 ├── storage.tf                         # GCS medallion bucket definitions
 ├── variables.tf                       # Input variable declarations
@@ -736,6 +738,43 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
   -d '{"question": "Show me delay trends", "session_id": "bad session!"}'
 # → {"error": "'session_id' must contain only letters, digits, hyphens, or underscores (max 64 chars)"} HTTP 400
 ```
+
+---
+
+## Monitoring Dashboard
+
+Token spend and guardrail activity are exported from Cloud Run logs to BigQuery via a structured log sink, then surfaced in Looker Studio alongside the flight analytics dashboard.
+
+### How it works
+
+Every request emits structured JSON to stdout. Cloud Run forwards these to Cloud Logging, and the `aviation-cloudrun-monitoring` log sink writes them to BigQuery automatically.
+
+| Event | When emitted | Key fields |
+|-------|-------------|------------|
+| `token_usage` | Every `/retrieve` and `/agent` response | `endpoint`, `session_id`, `prompt_tokens`, `response_tokens`, `total_tokens` |
+| `guardrail_triggered` | Every rejected request (400) | `guardrail_type`, `reason`, `session_id` |
+| `bq_fallback` | When Vector Search returns < 3 results | `vs_results`, `session_id` |
+
+### BigQuery views
+
+| View | Description |
+|------|-------------|
+| `monitoring_token_usage_v` | Token spend per request — by hour, endpoint, and session |
+| `monitoring_guardrails_v` | Guardrail triggers and BigQuery fallback events — by hour and type |
+
+### Looker Studio dashboard pages
+
+**Page 1 — Token Usage**
+- Total tokens today / this week
+- Prompt vs response token split by endpoint (`/retrieve` vs `/agent`)
+- Top sessions by token spend
+
+**Page 2 — Guardrails & Reliability**
+- Rejection count by type (input validation, prompt injection)
+- BigQuery fallback rate (% of requests where Vector Search returned < 3 results)
+- Rejection trend over time
+
+> **Note**: The BigQuery sink table (`run_googleapis_com_stdout`) is created automatically on the first request after deployment. If `terraform apply` runs before any traffic, re-run it once the service receives its first request.
 
 ---
 
