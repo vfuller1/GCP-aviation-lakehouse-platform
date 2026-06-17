@@ -303,6 +303,7 @@ A Flask application deployed on **Cloud Run** (`aviation-retrieval`) implements 
 |----------|--------|-------------|
 | `/health` | GET | Liveness check |
 | `/health/ready` | GET | Readiness check (verifies BQ + Vector Search connectivity) |
+| `/ask` | POST | **Unified endpoint** — auto-routes to `/retrieve` or `/agent` based on question complexity; response includes `routed_to` field |
 | `/retrieve` | POST | RAG query: fixed embed → search → generate sequence |
 | `/agent` | POST | Agentic query: LangGraph loop, autonomous tool selection |
 | `/session/clear` | POST | Clear Firestore session history |

@@ -83,6 +83,37 @@ _SAFE_SESSION_RE  = re.compile(r'^[A-Za-z0-9_\-]{1,64}$')
 _AIRLINE_RE       = re.compile(r'^[A-Z0-9]{2,3}$')
 _ROUTE_RE         = re.compile(r'^[A-Z]{3}-[A-Z]{3}$')
 
+# ── Router signals — questions matching these patterns go to /agent ───────────
+_AGENT_SIGNALS = re.compile(
+    r'\b('
+    r'best|worst|compar(e|ing|ison)|versus|\bvs\b|rank(ing)?'
+    r'|which airline|most|least|highest|lowest'
+    r'|trend|over time|week.?over.?week|improv|worsen'
+    r'|should i|would you recommend|avoid|better alternative'
+    r'|across (airlines?|routes?)|all airlines?'
+    r'|and (also|what about)|as well as|additionally'
+    r')\b',
+    re.IGNORECASE,
+)
+
+def _classify_question(question: str) -> str:
+    """Heuristic router — returns 'agent' for complex/comparative questions,
+    'retrieve' for simple, scoped ones.
+
+    Signals that indicate /agent:
+      - Multiple question marks (more than one question)
+      - Comparative / ranking language (best, worst, compare, vs, rank)
+      - Superlatives implying cross-source aggregation (most, least, highest)
+      - Decision language (should I, avoid, recommend)
+      - Trend / time-series questions (over time, trend, week-over-week)
+    Everything else routes to /retrieve (faster, cheaper).
+    """
+    if question.count('?') > 1:
+        return "agent"
+    if _AGENT_SIGNALS.search(question):
+        return "agent"
+    return "retrieve"
+
 # ── Prompt injection defence ──────────────────────────────────────────────────
 _INJECTION_RE = re.compile(
     r'(ignore\s+(all\s+)?(previous|prior|above)\s+instructions?'
@@ -817,6 +848,40 @@ def agent_query():
     except Exception as e:
         logger.error(f"Agent query failed: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/ask", methods=["POST"])
+def ask():
+    """Unified endpoint — automatically routes to /retrieve or /agent.
+
+    Identical request schema to both endpoints:
+      {"question": "...", "session_id": "...", "airline": "...", ...}
+
+    Response is the same as the routed endpoint plus one extra field:
+      "routed_to": "retrieve" | "agent"
+
+    Routing heuristic:
+      → /agent  : comparative, ranking, trend, or multi-question queries
+      → /retrieve: specific, scoped, single-dimension queries
+    """
+    payload    = request.get_json(silent=True) or {}
+    question   = payload.get("question", "").strip()
+    session_id = payload.get("session_id", "").strip() or None
+
+    routed_to = _classify_question(question)
+    logger.info(f"Router: '{question[:80]}' → /{routed_to}")
+    _structured_log("router_decision", route=routed_to,
+                    session_id=session_id or "anonymous",
+                    question_length=len(question))
+
+    # Call the handler in the same Flask request context — request object is shared
+    result = agent_query() if routed_to == "agent" else retrieve()
+    response, status = result if isinstance(result, tuple) else (result, 200)
+
+    # Inject routing decision into the response body
+    data = response.get_json(force=True) or {}
+    data["routed_to"] = routed_to
+    return jsonify(data), status
 
 
 if __name__ == "__main__":
