@@ -375,6 +375,52 @@ ANSWER     : Delta (DL) is experiencing significant delays — BOS-EWR 100% dela
              avg 174.5 min; PHX-ATL 100% delayed, avg 156.8 min ...
 ```
 
+### BigQuery Fallback
+
+The fallback ensures the system **always returns an answer** — even when the Vector Search index is stale or rebuilding after an ingest.
+
+**Decision logic** (`retrieval_service.py`):
+```python
+if len(context_docs) < 3:
+    # Vector Search didn't return enough — BigQuery steps in
+    facts = query_bigquery_fallback(...)
+else:
+    # Vector Search healthy — BigQuery skipped entirely
+    facts = []
+```
+
+The threshold is **3 results** (not 0) — because 1 or 2 results signals a partially stale index, not a healthy one.
+
+**Why Vector Search returns < 3:**
+
+| Reason | Detail |
+|--------|--------|
+| Index rebuilding | BATCH_UPDATE takes 1–2 hours after each ingest job |
+| First deployment | Index is empty until the first ingest run completes |
+| Embedding mismatch | Query model differs from the model used to build the index |
+
+**What BigQuery returns** — query type is determined by keywords in the question:
+
+| `query_type` | Triggered by | Returns |
+|---|---|---|
+| `airline` | `"delay"` in question | Avg delays, weather %, on-time % per carrier |
+| `route_risk` | `"route"` + `"delay"` or `"risk"` | Delay stats and risk scores per route |
+| `generic` | Everything else | Summary rows from `ai_rag_documents` |
+
+**How to tell which path ran** — read `context_count` vs `facts_count` in the response:
+
+```
+Fallback ran (VS stale):        Healthy VS (no fallback):
+  "context_count": 0              "context_count": 5
+  "facts_count":   10             "facts_count":   0
+  "tools_used": [                 "tools_used": [
+    "bigquery_fallback",            "vector_search",
+    "gemini_2.5_flash"              "gemini_2.5_flash"
+  ]                               ]
+```
+
+> The system never returns an empty answer. BigQuery `ai_rag_documents` is always populated by the ingest job regardless of Vector Search status, so the fallback always has data to work with.
+
 ---
 
 ### Complex Path — `/agent`
