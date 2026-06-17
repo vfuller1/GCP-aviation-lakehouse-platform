@@ -687,6 +687,14 @@ def retrieve():
             for doc in context_docs
         ]
 
+        # Build tools_used: show which data sources were actually queried
+        tools_used = []
+        if len(context_docs) > 0:
+            tools_used.append("vector_search")
+        if len(facts) > 0:
+            tools_used.append("bigquery_fallback")
+        tools_used.append("gemini_2.5_flash")
+
         return jsonify({
             "question":      question,
             "answer":        answer,
@@ -694,6 +702,7 @@ def retrieve():
             "history_turns": len(history) // 2,
             "context_count": len(context_docs),
             "facts_count":   len(facts),
+            "tools_used":    tools_used,
             "token_usage":   token_usage,
             "sources":       sources,
             "timestamp":     datetime.utcnow().isoformat() + "Z",
@@ -840,6 +849,7 @@ def agent_query():
             "answer":       answer,
             "session_id":   session_id,
             "tools_called": tools_called,
+            "tools_used":   tools_called + ["gemini_2.5_flash"],
             "steps":        len(result["messages"]),
             "token_usage":  token_usage,
             "timestamp":    datetime.utcnow().isoformat() + "Z",
