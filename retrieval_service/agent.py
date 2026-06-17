@@ -348,5 +348,11 @@ def run(messages: List[BaseMessage]) -> dict:
 
     The caller is responsible for prepending a SystemMessage and any history.
     The final answer is in result['messages'][-1].content.
+
+    recursion_limit=10 allows up to 4 tool calls + synthesis before forcing a
+    stop — prevents runaway loops while still supporting complex multi-tool queries.
     """
-    return _get_agent().invoke({"messages": messages})
+    return _get_agent().invoke(
+        {"messages": messages},
+        config={"recursion_limit": 10},
+    )
