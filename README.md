@@ -288,14 +288,7 @@ A Vertex AI Vector Search **index** (`aviation-rag-index`) is built from the `ai
 
 ### Retrieval Service
 
-A Flask application deployed on **Cloud Run** (`aviation-retrieval`) implements a Retrieval-Augmented Generation (RAG) pattern:
-
-1. Embed the user question using `text-embedding-005`
-2. Query Vector Search for the top-K nearest neighbours
-3. **If VS returns ≥ 3 results** → use those as context (BigQuery skipped)  
-   **If VS returns < 3 results** → query BigQuery `ai_rag_documents` as fallback
-4. Send the retrieved context + question to **Gemini 2.5 Flash**
-5. Return the structured answer
+A Flask application deployed on **Cloud Run** (`aviation-retrieval`) exposes three AI endpoints backed by two distinct reasoning paths.
 
 **Base URL**: `https://aviation-retrieval-ohvijuloea-uc.a.run.app`
 
@@ -303,16 +296,127 @@ A Flask application deployed on **Cloud Run** (`aviation-retrieval`) implements 
 |----------|--------|-------------|
 | `/health` | GET | Liveness check |
 | `/health/ready` | GET | Readiness check (verifies BQ + Vector Search connectivity) |
-| `/ask` | POST | **Unified endpoint** — auto-routes to `/retrieve` or `/agent` based on question complexity; response includes `routed_to` field |
-| `/retrieve` | POST | RAG query: fixed embed → search → generate sequence |
-| `/agent` | POST | Agentic query: LangGraph loop, autonomous tool selection |
+| `/ask` | POST | **Unified router** — auto-routes to `/retrieve` or `/agent`; response includes `routed_to` and `tools_used` |
+| `/retrieve` | POST | **Simple path** — fixed pipeline: embed → Vector Search → Gemini (1 Gemini call) |
+| `/agent` | POST | **Complex path** — LangGraph loop: autonomous tool selection, multi-step reasoning |
 | `/session/clear` | POST | Clear Firestore session history |
 
-**Example** — ask a delay question:
+---
+
+### Router (`/ask`) — Simple vs Complex
+
+The `/ask` endpoint is the recommended entry point. It classifies the question using a zero-latency heuristic and forwards to the right AI layer automatically.
+
+```
+User question
+      │
+      ▼
+  _classify_question()   ← heuristic, no LLM call, no cost
+      │
+      ├── simple / scoped  ──►  /retrieve   fast, 1 Gemini call, ~500–800 tokens
+      └── complex / comparative ──►  /agent  LangGraph loop, 3–5 steps, ~2000–3000 tokens
+```
+
+**Signals that route to `/agent`** (matched by regex, zero latency):
+
+| Signal | Example words |
+|--------|--------------|
+| Ranking / superlatives | `best`, `worst`, `highest`, `lowest`, `most`, `least` |
+| Comparison | `compare`, `versus`, `vs`, `rank` |
+| Decision language | `should I`, `avoid`, `recommend`, `better alternative` |
+| Trend / time-series | `trend`, `over time`, `week over week` |
+| Multiple questions | Two or more `?` in one request |
+
+Everything else routes to `/retrieve`.
+
+**Every `/ask` response includes:**
+```json
+{
+  "routed_to":    "retrieve" or "agent",
+  "tools_used":   ["bigquery_fallback", "gemini_2.5_flash"],
+  "tools_called": ["query_analytics"],
+  "steps":        5
+}
+```
+
+---
+
+### Simple Path — `/retrieve`
+
+**Purpose**: Fast, deterministic answers to well-scoped questions about a single airline, route, or fact. One Gemini call, predictable latency and cost.
+
+```
+1. Embed question        text-embedding-005 → 768-dim vector
+2. Vector Search         top-K nearest flight records
+3. BigQuery fallback     only if VS returns < 3 results
+4. Gemini 2.5 Flash      single call with retrieved context
+5. Return answer         + context_count, facts_count, tools_used
+```
+
+**Example question**: *"What delays is Delta experiencing?"*
 ```bash
-curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/retrieve \
+curl -s -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/ask \
   -H "Content-Type: application/json" \
-  -d '{"question": "Which routes have the highest weather-related delays?", "session_id": "demo-1"}'
+  -d '{"question": "What delays is Delta experiencing?", "airline": "DL", "session_id": "demo-s"}' \
+  | python3 -c "
+import sys, json; d = json.load(sys.stdin)
+print('ROUTED TO  :', d.get('routed_to'))
+print('TOOLS USED :', d.get('tools_used'))
+print('TOKENS     :', d.get('token_usage',{}).get('total_tokens'))
+print('ANSWER     :', d.get('answer','')[:300])"
+```
+
+Expected output:
+```
+ROUTED TO  : retrieve
+TOOLS USED : ['bigquery_fallback', 'gemini_2.5_flash']
+TOKENS     : 777
+ANSWER     : Delta (DL) is experiencing significant delays — BOS-EWR 100% delayed,
+             avg 174.5 min; PHX-ATL 100% delayed, avg 156.8 min ...
+```
+
+---
+
+### Complex Path — `/agent`
+
+**Purpose**: Autonomous reasoning for comparative, ranking, or multi-source questions. LangGraph runs a decision loop — the agent decides which tools to call and in what order, retrying with different parameters if needed, stopping only when it has enough evidence.
+
+```
+1. LangGraph loop starts
+   ├── Agent node   Gemini decides: "which tool do I need?"
+   ├── Tool node    Runs the chosen tool, appends result to state
+   └── Agent node   Gemini decides: "do I need another tool, or is this enough?"
+       ├── YES → loop back to tool node
+       └── NO  → synthesise final answer → END
+2. Return answer    + tools_called, tools_used, steps, token_usage
+```
+
+`recursion_limit = 10` caps the loop at 4 tool calls max, preventing runaway loops.
+
+**Example question**: *"Which airline has the worst on-time performance this week?"*
+```bash
+curl -s -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Which airline has the worst on-time performance this week?", "session_id": "demo-c"}' \
+  | python3 -c "
+import sys, json; d = json.load(sys.stdin)
+print('ROUTED TO  :', d.get('routed_to'))
+print('TOOLS USED :', d.get('tools_used'))
+print('TOOLS CALLED:', d.get('tools_called'))
+print('STEPS      :', d.get('steps'))
+print('TOKENS     :', d.get('token_usage',{}).get('total_tokens'))
+print('ANSWER     :', d.get('answer','')[:300])"
+```
+
+Expected output:
+```
+ROUTED TO   : agent
+TOOLS USED  : ['query_analytics', 'gemini_2.5_flash']
+TOOLS CALLED: ['query_analytics']
+STEPS       : 5
+TOKENS      : 2738
+ANSWER      : Delta (DL) had the worst on-time performance — 100% delayed on
+              BOS-EWR, avg 174.5 min delay over the last 7 days.
 ```
 
 ### Session Memory
@@ -339,7 +443,7 @@ Each session document also accumulates a running `token_usage` sub-document acro
 
 ![AI Layer Request Flows — /retrieve vs /agent](images/AI%20Layer%20Request%20Flows%20-%20RAG%20vs.%20Agent.jpg)
 
-**Key difference**: `/retrieve` embeds the question, queries Vector Search, and only calls BigQuery if Vector Search returns fewer than 3 results. `/agent` makes 1–N tool calls chosen at runtime — the `tools_called` array in the response shows exactly what ran.
+The `/ask` router classifies every question with a zero-latency heuristic and forwards to the right path. Simple, scoped questions go to `/retrieve` (fixed pipeline, 1 Gemini call). Comparative, ranking, or multi-step questions go to `/agent` (LangGraph loop, autonomous tool selection). The `routed_to` and `tools_used` fields in every response show exactly which path ran and which data sources were queried.
 
 ---
 
@@ -392,15 +496,19 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 
 > **Agent token note**: `token_usage` sums across every Gemini call in the loop — each tool-call decision and the final synthesis step. A 5-step agent run with 2 tool calls will show the combined token spend for all 3 Gemini invocations.
 
-### /retrieve vs /agent
+### /retrieve vs /agent vs /ask
 
-| | `/retrieve` | `/agent` |
-|---|---|---|
-| Flow | Fixed: embed → vector search → Gemini (BQ fallback if VS < 3 results) | Autonomous: agent decides tools + order |
-| Tool calls | 1 vector search + conditional BQ query | 1–N calls based on question complexity |
-| Multi-step reasoning | No | Yes — can refine query if first call is empty |
-| Latency | Lower (~2–4 s) | Higher (~4–10 s depending on steps) |
-| Best for | High-volume, well-scoped questions | Complex, multi-faceted or exploratory questions |
+| | `/retrieve` (simple path) | `/agent` (complex path) | `/ask` (router) |
+|---|---|---|---|
+| **Purpose** | Fast, scoped factual lookup | Autonomous cross-source reasoning | Single entry point — auto-selects the right path |
+| **Flow** | Fixed: embed → VS → Gemini | LangGraph loop: agent decides tools + order | Heuristic classify → forward to `/retrieve` or `/agent` |
+| **Gemini calls** | 1 | 1 per step (typically 2–3) | Depends on routed path |
+| **Tool calls** | Vector Search + conditional BQ | 1–4 autonomous tool calls | Depends on routed path |
+| **Steps** | N/A (no loop) | 3–5 typical (capped at 10) | N/A |
+| **Tokens** | ~500–800 | ~2000–3000 | Depends on routed path |
+| **Latency** | ~2–4 s | ~4–10 s | Adds ~0 ms (no LLM call) |
+| **Response extras** | `context_count`, `facts_count`, `tools_used` | `tools_called`, `tools_used`, `steps` | `routed_to` + all fields from routed endpoint |
+| **Best for** | "What are Delta's delays?" | "Which airline has the worst performance?" | All questions — recommended default |
 
 ---
 
