@@ -662,7 +662,7 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/multi-agent \
 
 Worker 2 has a hard dependency on Worker 1's output — it cannot recommend mitigation before risk has been quantified. This is the right pattern when workers depend on each other. A **fan-out/fan-in** design (`ParallelAgent`) would instead be used for independent workers — e.g. a "Daily Ops Briefing" combining a Risk Analyst, a Weather Analyst, and a Pipeline Health check that don't depend on each other's output, where running them in parallel and synthesizing at the end is faster than running them one after another.
 
-> **Note**: `google-adk` is a newer framework (2025). The `Agent`, `SequentialAgent`, and `Runner` APIs used here reflect ADK's documented patterns at time of writing — verify against the installed package version if extending this module.
+> **Verified**: Tested locally against `google-adk==2.3.0` — `Agent`, `SequentialAgent`, `Runner`, and `InMemorySessionService` field names and signatures all match this module's usage. Authentication forces Vertex AI (service account) mode via `GOOGLE_GENAI_USE_VERTEXAI` rather than ADK's default Gemini API key lookup, matching how `agent.py` and `retrieval_service.py` already authenticate. Full execution requires GCP Application Default Credentials (present on Cloud Run, not on a bare local machine).
 
 ---
 

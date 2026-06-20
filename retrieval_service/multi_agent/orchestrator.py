@@ -15,15 +15,27 @@ design (parallel workers + synthesis) which would be used for independent
 workers, e.g. a "daily ops briefing" combining risk + weather + pipeline
 health checks that don't depend on each other.
 
-NOTE: SequentialAgent composition and Runner/session API are based on
-google-adk's documented patterns as of its 2025 release. Verify against
-the installed package version — this is a newer framework and the exact
-Runner/session calls may have changed.
+Verified against google-adk==2.3.0 (installed and import-tested locally):
+Agent/SequentialAgent field names and Runner/InMemorySessionService/
+run_async signatures all match this module's usage.
+
+IMPORTANT: ADK's underlying google-genai Client defaults to Gemini API key
+auth, not Vertex AI. This project authenticates via GCP service account
+(no API key), so GOOGLE_GENAI_USE_VERTEXAI/GOOGLE_CLOUD_PROJECT/
+GOOGLE_CLOUD_LOCATION must be set BEFORE the Agent model strings are
+resolved — done below via os.environ.setdefault(), matching how the rest
+of this codebase (agent.py, retrieval_service.py) authenticates to Vertex AI.
 """
 
 import asyncio
 import logging
 import os
+
+# Must be set before any ADK Agent talks to a model — forces Vertex AI
+# (service account) auth instead of ADK's default Gemini API key lookup.
+os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "true")
+os.environ.setdefault("GOOGLE_CLOUD_PROJECT", os.getenv("GCP_PROJECT_ID", "gcp-lakehouseproject"))
+os.environ.setdefault("GOOGLE_CLOUD_LOCATION", os.getenv("VERTEX_REGION", "us-central1"))
 
 from google.adk.agents import SequentialAgent
 from google.adk.runners import Runner
