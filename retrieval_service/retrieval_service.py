@@ -860,6 +860,67 @@ def agent_query():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/multi-agent", methods=["POST"])
+def multi_agent_query():
+    """
+    Multi-agent endpoint — ADK SequentialAgent proof-of-concept.
+
+    Unlike /agent (one LangGraph agent looping over 3 tools), this endpoint
+    runs TWO distinct agents with a real handoff: the Risk Analyst detects
+    and quantifies delay risk from BigQuery, then the Mitigation Advisor
+    receives that risk assessment as its input and recommends an action.
+    Worker 2 cannot run meaningfully without Worker 1's output first —
+    that dependency is what makes this multi-agent rather than multi-tool.
+
+    Request JSON:
+    {
+        "question":   "Delta is showing high delays on BOS-EWR — what should operations do?",
+        "session_id": "optional-session-id"
+    }
+
+    Response JSON:
+    {
+        "question":   "...",
+        "answer":     "...",
+        "agents_run": ["risk_analyst", "mitigation_advisor"],
+        "session_id": "...",
+        "timestamp":  "..."
+    }
+    """
+    try:
+        from multi_agent.orchestrator import run as run_multi_agent
+
+        payload    = request.get_json(silent=True) or {}
+        question   = payload.get("question", "").strip()
+        session_id = payload.get("session_id", "").strip() or None
+
+        err, status = _validate_input(question, session_id)
+        if err:
+            _structured_log("guardrail_triggered", severity="WARNING",
+                            guardrail_type="input_validation",
+                            reason=err, session_id=session_id or "anonymous")
+            return jsonify({"error": err}), status
+
+        logger.info(f"Multi-agent query: {question} (session={session_id})")
+
+        result = run_multi_agent(question)
+
+        if session_id:
+            append_session_turn(session_id, question, result["answer"], {})
+
+        return jsonify({
+            "question":   question,
+            "answer":     result["answer"],
+            "agents_run": result["agents_run"],
+            "session_id": session_id,
+            "timestamp":  datetime.utcnow().isoformat() + "Z",
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Multi-agent query failed: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/ask", methods=["POST"])
 def ask():
     """Unified endpoint — automatically routes to /retrieve or /agent.

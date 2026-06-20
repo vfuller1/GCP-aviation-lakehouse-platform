@@ -23,6 +23,7 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
   - [Session Memory](#session-memory)
 - [End-to-End Request Flows](#end-to-end-request-flows)
 - [Agentic Layer (LangGraph)](#agentic-layer-langgraph)
+- [Multi-Agent Layer (Google ADK) — Proof of Concept](#multi-agent-layer-google-adk--proof-of-concept)
 - [BigQuery Views Reference](#bigquery-views-reference)
 - [CI/CD Workflows](#cicd-workflows)
 - [End-to-End Runtime Sequence](#end-to-end-runtime-sequence)
@@ -565,6 +566,103 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 | **Latency** | ~2–4 s | ~4–10 s | Adds ~0 ms (no LLM call) |
 | **Response extras** | `context_count`, `facts_count`, `tools_used` | `tools_called`, `tools_used`, `steps` | `routed_to` + all fields from routed endpoint |
 | **Best for** | "What are Delta's delays?" | "Which airline has the worst performance?" | All questions — recommended default |
+
+---
+
+## Multi-Agent Layer (Google ADK) — Proof of Concept
+
+> **Status**: Proof-of-concept module, isolated from the production endpoints above. Built to demonstrate genuine multi-agent orchestration (distinct agent roles + handoff) alongside the existing single-agent LangGraph implementation.
+
+### Multi-step vs. multi-agent — the distinction this module demonstrates
+
+`/agent` (LangGraph) is **single-agent, multi-step**: one decision-maker loops through up to 3 tools, choosing which to call and when to stop. `/multi-agent` (ADK) is genuinely **multi-agent**: two distinct agents with different roles, where the second agent's input is the first agent's output — a real dependency chain, not just tool selection.
+
+```
+                    /agent (LangGraph)              /multi-agent (ADK)
+                    ───────────────────              ──────────────────
+                    1 decision-maker                 2 agents, distinct roles
+                    loops over 3 tools                Worker 1 → Worker 2 (sequential handoff)
+                    "which tool do I need?"           "detect risk" → "recommend action"
+```
+
+### Architecture — Disruption Response Chain
+
+```
+User question
+      │
+      ▼
+┌─────────────────────────────┐
+│  SUPER-AGENT (Orchestrator)  │   SequentialAgent — runs sub-agents in order
+│  disruption_response_        │
+│  orchestrator                │
+└──────────────┬───────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│  WORKER 1: Risk Analyst      │   Role: detect & quantify the problem
+│  Tool: detect_delay_risk()   │   Queries BigQuery ai_rag_documents
+│  → "Delta BOS-EWR: 100%      │
+│     delayed, 174.5 min avg,  │
+│     14% weather"             │
+└──────────────┬───────────────┘
+               │  (A2A handoff — Worker 1's output
+               │   becomes Worker 2's input)
+               ▼
+┌─────────────────────────────┐
+│  WORKER 2: Mitigation        │   Role: given a risk, recommend action
+│  Advisor                     │   No tools — reasons only over Worker 1's
+│  → "Not weather-driven (14%) │   output (decision rules in its prompt)
+│     — escalate to ops for    │
+│     schedule review"         │
+└──────────────┬───────────────┘
+               │
+               ▼
+        Final answer returned
+```
+
+### Code structure
+
+```
+retrieval_service/
+└── multi_agent/
+    ├── __init__.py
+    ├── tools.py              # detect_delay_risk() — BigQuery query, scoped for risk detection
+    ├── worker_risk.py        # Risk Analyst ADK Agent — detects & quantifies
+    ├── worker_mitigation.py  # Mitigation Advisor ADK Agent — recommends action
+    └── orchestrator.py       # SequentialAgent wiring + run() entrypoint
+```
+
+This module is fully isolated — it does not modify `agent.py`, `retrieval_service.py`'s existing endpoints, or any Terraform-provisioned infrastructure. It reuses the same `aviation_analytics` BigQuery dataset the rest of the platform already provisions.
+
+### Endpoint
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/multi-agent` | POST | Runs the Disruption Response Chain — Risk Analyst → Mitigation Advisor |
+
+**Example**:
+```bash
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/multi-agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Delta is showing high delays on BOS-EWR — what should operations do?", "session_id": "demo-multi-agent"}'
+```
+
+**Response shape**:
+```json
+{
+  "question":   "Delta is showing high delays on BOS-EWR — what should operations do?",
+  "answer":     "Delta's BOS-EWR delays are not primarily weather-driven (14%) — recommend escalating to operations for a schedule/crew review rather than treating this as a weather event.",
+  "agents_run": ["risk_analyst", "mitigation_advisor"],
+  "session_id": "demo-multi-agent",
+  "timestamp":  "2026-06-20T12:00:00Z"
+}
+```
+
+### Why SequentialAgent, not ParallelAgent
+
+Worker 2 has a hard dependency on Worker 1's output — it cannot recommend mitigation before risk has been quantified. This is the right pattern when workers depend on each other. A **fan-out/fan-in** design (`ParallelAgent`) would instead be used for independent workers — e.g. a "Daily Ops Briefing" combining a Risk Analyst, a Weather Analyst, and a Pipeline Health check that don't depend on each other's output, where running them in parallel and synthesizing at the end is faster than running them one after another.
+
+> **Note**: `google-adk` is a newer framework (2025). The `Agent`, `SequentialAgent`, and `Runner` APIs used here reflect ADK's documented patterns at time of writing — verify against the installed package version if extending this module.
 
 ---
 
