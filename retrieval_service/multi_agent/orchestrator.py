@@ -72,7 +72,10 @@ async def _run_async(question: str, user_id: str = "demo-user") -> dict:
     async for event in runner.run_async(
         user_id=user_id, session_id=session.id, new_message=content
     ):
-        if getattr(event, "author", None):
+        # ADK emits multiple events per agent turn (model decision, tool call,
+        # tool result) — only record a transition when the author changes, so
+        # agents_run reflects which AGENTS ran, not how many events each emitted.
+        if getattr(event, "author", None) and (not agents_run or agents_run[-1] != event.author):
             agents_run.append(event.author)
         if event.is_final_response() and event.content and event.content.parts:
             final_answer = event.content.parts[0].text
