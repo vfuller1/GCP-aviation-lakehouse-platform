@@ -24,6 +24,7 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 - [End-to-End Request Flows](#end-to-end-request-flows)
 - [Agentic Layer (LangGraph)](#agentic-layer-langgraph)
 - [Multi-Agent Layer (Google ADK) — Proof of Concept](#multi-agent-layer-google-adk--proof-of-concept)
+- [Coordination Agent — Dynamic Multi-Worker Routing](#coordination-agent--dynamic-multi-worker-routing)
 - [BigQuery Views Reference](#bigquery-views-reference)
 - [CI/CD Workflows](#cicd-workflows)
 - [End-to-End Runtime Sequence](#end-to-end-runtime-sequence)
@@ -754,6 +755,93 @@ python -m multi_agent.eval
 ```
 
 > **Next step**: migrate these checks into ADK's native `AgentEvaluator` + `.test.json` eval sets once there's time to validate the full `Invocation` schema against real agent runs — the custom harness above is the pragmatic stand-in, not the long-term answer.
+
+---
+
+## Coordination Agent — Dynamic Multi-Worker Routing
+
+A second multi-agent pattern, alongside `/multi-agent`'s fixed `SequentialAgent`. `/coordinate` is itself **LLM-powered** — it reasons about which of its 4 specialist workers are relevant to a given question and calls only those, rather than always running the same fixed list.
+
+### Why this exists alongside `/multi-agent`
+
+| | `/multi-agent` (SequentialAgent) | `/coordinate` (coordination agent) |
+|---|---|---|
+| **Orchestrator has its own LLM call** | No — pure control flow | Yes — Gemini decides which workers to call |
+| **Workers called** | Always both, fixed order | Varies — 1 to 4, decided per question |
+| **Right for** | Fixed, known dependency (mitigation always needs risk first) | Open-ended questions where relevance genuinely varies |
+
+The Disruption Response Chain always needs both workers — there's no decision to make, so a fixed `SequentialAgent` is correct and cheaper (no extra LLM call to decide something that never changes). The Operations Assistant has 4 workers where the right subset **actually changes per question** — that's when paying for a coordinator's reasoning is worth it.
+
+### The 4 workers
+
+| Worker | Specialty | Has a tool? |
+|---|---|---|
+| `risk_analyst` | Delay statistics per airline/route | `detect_delay_risk()` |
+| `weather_analyst` | Weather-specific delay impact, isolated from scheduling delays | `detect_weather_impact()` |
+| `pipeline_health` | Data freshness / pipeline status | `check_pipeline_health()` |
+| `mitigation_advisor` | Recommended operational action (needs `risk_analyst`'s output first) | None — reasons over input only |
+
+### Design choice — `AgentTool`, not `sub_agents` + transfer
+
+ADK offers two ways for an agent to delegate to others:
+
+```
+sub_agents=[...]              tools=[AgentTool(worker), ...]
+        │                              │
+        ▼                              ▼
+transfer_to_agent_tool         Worker called like a function —
+auto-injected — control        coordinator GETS THE RESULT BACK
+PERMANENTLY hands off to       and can call more workers, then
+the chosen sub-agent           synthesize one combined answer
+```
+
+The coordinator needs to call **multiple** workers for some questions and combine their outputs into one answer — a permanent handoff (`sub_agents`) would lose that ability after the first worker runs. `AgentTool` keeps the coordinator in control.
+
+### Example — same coordinator, different routing per question
+
+```bash
+# Routes to: pipeline_health only
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/coordinate \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Is the data fresh?", "session_id": "demo-coord-1"}'
+
+# Routes to: risk_analyst + weather_analyst (no action requested, mitigation_advisor skipped)
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/coordinate \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Is Delta'\''s BOS-EWR delay weather or scheduling related?", "session_id": "demo-coord-2"}'
+
+# Routes to: risk_analyst + mitigation_advisor (weather not mentioned, skipped)
+curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/coordinate \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Delta is delayed on BOS-EWR - what should ops do?", "session_id": "demo-coord-3"}'
+```
+
+**Response shape**:
+```json
+{
+  "question":       "Is Delta's BOS-EWR delay weather or scheduling related?",
+  "answer":         "...",
+  "workers_called": ["risk_analyst", "weather_analyst"],
+  "session_id":     "demo-coord-2",
+  "timestamp":      "2026-06-21T12:00:00Z"
+}
+```
+
+The `workers_called` array is the proof point — it should genuinely differ across the three example questions above. If it's always `["risk_analyst", "weather_analyst", "pipeline_health", "mitigation_advisor"]` regardless of the question, the coordinator isn't actually routing dynamically — it's worth checking this in your own test runs.
+
+### Code structure
+
+```
+retrieval_service/multi_agent/
+├── worker_risk.py        # existing — Risk Analyst
+├── worker_mitigation.py  # existing — Mitigation Advisor
+├── worker_weather.py     # NEW — Weather Analyst
+├── worker_pipeline.py    # NEW — Pipeline Health
+├── orchestrator.py       # existing — SequentialAgent, fixed routing
+└── coordinator.py        # NEW — LLM-powered Agent, dynamic routing
+```
+
+> **Verified**: `AgentTool`, `Agent`, `Runner`, `InMemorySessionService` constructed and tested locally against `google-adk==2.3.0` — `operations_coordinator` builds successfully with all 4 worker tools wired (`risk_analyst`, `weather_analyst`, `pipeline_health`, `mitigation_advisor`). Full execution requires GCP Application Default Credentials, same as `/multi-agent`.
 
 ---
 

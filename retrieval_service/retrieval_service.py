@@ -921,6 +921,67 @@ def multi_agent_query():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/coordinate", methods=["POST"])
+def coordinate_query():
+    """
+    Coordination agent endpoint — dynamic multi-worker routing.
+
+    Unlike /multi-agent (SequentialAgent — always runs both workers in a
+    fixed order, no LLM call of its own for orchestration), this endpoint
+    is itself LLM-powered: operations_coordinator reasons about which of
+    its 4 workers (risk_analyst, weather_analyst, pipeline_health,
+    mitigation_advisor) are relevant to the question and calls only those.
+    workers_called varies per question — that's the point.
+
+    Request JSON:
+    {
+        "question":   "Is Delta's BOS-EWR delay weather or scheduling related?",
+        "session_id": "optional-session-id"
+    }
+
+    Response JSON:
+    {
+        "question":       "...",
+        "answer":         "...",
+        "workers_called": ["risk_analyst", "weather_analyst"],
+        "session_id":     "...",
+        "timestamp":      "..."
+    }
+    """
+    try:
+        from multi_agent.coordinator import run as run_coordinator
+
+        payload    = request.get_json(silent=True) or {}
+        question   = payload.get("question", "").strip()
+        session_id = payload.get("session_id", "").strip() or None
+
+        err, status = _validate_input(question, session_id)
+        if err:
+            _structured_log("guardrail_triggered", severity="WARNING",
+                            guardrail_type="input_validation",
+                            reason=err, session_id=session_id or "anonymous")
+            return jsonify({"error": err}), status
+
+        logger.info(f"Coordination query: {question} (session={session_id})")
+
+        result = run_coordinator(question)
+
+        if session_id:
+            append_session_turn(session_id, question, result["answer"], {})
+
+        return jsonify({
+            "question":       question,
+            "answer":         result["answer"],
+            "workers_called": result["workers_called"],
+            "session_id":     session_id,
+            "timestamp":      datetime.utcnow().isoformat() + "Z",
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Coordination query failed: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/ask", methods=["POST"])
 def ask():
     """Unified endpoint — automatically routes to /retrieve or /agent.
