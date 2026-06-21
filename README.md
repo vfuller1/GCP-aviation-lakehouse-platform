@@ -1455,7 +1455,7 @@ Assessment of the platform against the [OWASP Top 10 for LLM Applications](https
 
 | # | Vulnerability | Status | How it's covered |
 |---|---|---|---|
-| LLM01 | Prompt Injection | ✅ Strong | `_INJECTION_RE` regex strips override patterns from all retrieved content; XML-delimited prompt sections separate instructions from untrusted data; both `/retrieve` and `/agent` prompts explicitly instruct Gemini to ignore instructions inside retrieved sections |
+| LLM01 | Prompt Injection | ✅ Strong | `_INJECTION_RE` regex strips override patterns from all retrieved content across all 4 agent endpoints; XML-delimited prompt sections separate instructions from untrusted data in `/retrieve`/`/agent`; `/multi-agent` and `/coordinate` workers each sanitise BigQuery tool output and explicitly instruct Gemini not to follow instructions found in tool/worker results |
 | LLM02 | Insecure Output Handling | ⚠️ Partial | Responses returned as JSON (not rendered as HTML by this service); no HTML escaping of answer text — downstream clients must escape before rendering |
 | LLM03 | Training Data Poisoning | ✅ Good | No fine-tuning or training — uses Google's hosted Gemini 2.5 Flash; RAG documents come from a deterministic synthetic ingest job; Databricks `bronze_to_silver` filters null, out-of-range, and duplicate records before anything enters the AI layer |
 | LLM04 | Model Denial of Service | ⚠️ Partial | Input size limits (question ≤ 500 chars, `days_back` 1–30, `top_k` 1–20); Cloud Armor WAF at the network edge; no per-IP rate limiting or per-session token budget |

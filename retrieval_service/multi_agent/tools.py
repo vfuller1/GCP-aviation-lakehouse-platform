@@ -5,11 +5,18 @@ detect_delay_risk        -> risk_analyst (per-airline / per-route delay stats)
 detect_weather_impact    -> weather_analyst (weather-specific delay breakdown)
 check_pipeline_health    -> pipeline_health (data freshness, reuses agent.py's
                              get_pipeline_status query pattern)
+
+Security note: every tool return value is sanitised before reaching the LLM.
+agent.py and retrieval_service.py both strip instruction-override patterns
+from retrieved content (LLM01 prompt injection defence) -- this module had
+no equivalent until this fix, leaving BigQuery row text un-sanitised on the
+path into the ADK agents' context.
 """
 
 import json
 import logging
 import os
+import re
 
 from google.cloud import bigquery
 
@@ -17,6 +24,25 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "gcp-lakehouseproject")
 BQ_DATASET = os.getenv("BQ_DATASET", "aviation_analytics")
+
+# Same pattern as agent.py / retrieval_service.py — kept independent per
+# module rather than imported, since this module is deliberately isolated
+# from the LangGraph layer.
+_INJECTION_RE = re.compile(
+    r'(ignore\s+(all\s+)?(previous|prior|above)\s+instructions?'
+    r'|you\s+are\s+now\s+(a|an)\s'
+    r'|system\s*:'
+    r'|disregard\s+(all\s+)?prior'
+    r'|new\s+instructions?'
+    r'|act\s+as\s+(if\s+you\s+(are|were)\s)?)',
+    re.IGNORECASE,
+)
+
+
+def _sanitise(text: str) -> str:
+    """Strip instruction-override patterns from BigQuery-returned content
+    before it enters any agent's context."""
+    return _INJECTION_RE.sub('[REDACTED]', str(text))
 
 
 def detect_delay_risk(airline: str = "", route: str = "", days_back: int = 7) -> str:
@@ -61,7 +87,7 @@ def detect_delay_risk(airline: str = "", route: str = "", days_back: int = 7) ->
         LIMIT 5
         """
         rows = [dict(r) for r in client.query(sql, job_config=job_config).result()]
-        return json.dumps({"row_count": len(rows), "rows": rows}, default=str)
+        return _sanitise(json.dumps({"row_count": len(rows), "rows": rows}, default=str))
 
     except Exception as exc:
         logger.warning("detect_delay_risk failed: %s", exc)
@@ -104,7 +130,7 @@ def detect_weather_impact(airline: str = "", days_back: int = 7) -> str:
           {al_clause}
         """
         rows = [dict(r) for r in client.query(sql, job_config=job_config).result()]
-        return json.dumps({"row_count": len(rows), "rows": rows}, default=str)
+        return _sanitise(json.dumps({"row_count": len(rows), "rows": rows}, default=str))
 
     except Exception as exc:
         logger.warning("detect_weather_impact failed: %s", exc)
@@ -132,7 +158,7 @@ def check_pipeline_health() -> str:
         try:
             rows = [dict(r) for r in client.query(gold_sql).result()]
             if rows and rows[0].get("gold_summary_rows"):
-                return json.dumps({"status": "ok", "source": "gold_layer", "pipeline_data": rows}, default=str)
+                return _sanitise(json.dumps({"status": "ok", "source": "gold_layer", "pipeline_data": rows}, default=str))
         except Exception as gold_exc:
             logger.warning("bi_pipeline_refresh_v failed (%s); falling back", gold_exc)
 
@@ -142,7 +168,7 @@ def check_pipeline_health() -> str:
         FROM `{PROJECT_ID}.{BQ_DATASET}.ai_rag_documents`
         """
         rows = [dict(r) for r in client.query(rag_sql).result()]
-        return json.dumps({"status": "ok", "source": "ai_rag_documents", "pipeline_data": rows}, default=str)
+        return _sanitise(json.dumps({"status": "ok", "source": "ai_rag_documents", "pipeline_data": rows}, default=str))
 
     except Exception as exc:
         return json.dumps({"status": "error", "error": str(exc)})
