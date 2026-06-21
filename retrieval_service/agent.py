@@ -236,14 +236,14 @@ def query_analytics(
         try:
             rows = [dict(r) for r in client.query(primary_sql, job_config=primary_cfg).result()]
             if rows:
-                return json.dumps({"row_count": len(rows), "rows": rows, "source": "primary"})
+                return json.dumps({"row_count": len(rows), "rows": rows, "source": "primary"}, default=str)
             logger.info("Primary query returned 0 rows; trying ai_rag_documents fallback")
         except Exception as primary_exc:
             logger.warning("Primary query failed (%s); falling back to ai_rag_documents", primary_exc)
 
         generic_cfg = _cfg(include_airline=bool(airline), include_route=bool(route))
         rows = [dict(r) for r in client.query(generic_sql, job_config=generic_cfg).result()]
-        return json.dumps({"row_count": len(rows), "rows": rows, "source": "ai_rag_documents"})
+        return json.dumps({"row_count": len(rows), "rows": rows, "source": "ai_rag_documents"}, default=str)
 
     except Exception as exc:
         logger.warning("query_analytics failed: %s", exc)
@@ -279,7 +279,7 @@ def get_pipeline_status() -> str:
         try:
             rows = [dict(r) for r in client.query(gold_sql).result()]
             if rows and rows[0].get("gold_summary_rows"):
-                return json.dumps({"status": "ok", "source": "gold_layer", "pipeline_data": rows})
+                return json.dumps({"status": "ok", "source": "gold_layer", "pipeline_data": rows}, default=str)
             logger.info("bi_pipeline_refresh_v returned 0 gold rows; falling back to ai_rag_documents")
         except Exception as gold_exc:
             logger.warning("bi_pipeline_refresh_v failed (%s); falling back to ai_rag_documents", gold_exc)
@@ -294,7 +294,7 @@ def get_pipeline_status() -> str:
         FROM `{PROJECT_ID}.{BQ_DATASET}.ai_rag_documents`
         """
         rows = [dict(r) for r in client.query(rag_sql).result()]
-        return json.dumps({"status": "ok", "source": "ai_rag_documents", "pipeline_data": rows})
+        return json.dumps({"status": "ok", "source": "ai_rag_documents", "pipeline_data": rows}, default=str)
 
     except Exception as exc:
         return json.dumps({"status": "error", "error": str(exc)})

@@ -61,7 +61,7 @@ def detect_delay_risk(airline: str = "", route: str = "", days_back: int = 7) ->
         LIMIT 5
         """
         rows = [dict(r) for r in client.query(sql, job_config=job_config).result()]
-        return json.dumps({"row_count": len(rows), "rows": rows})
+        return json.dumps({"row_count": len(rows), "rows": rows}, default=str)
 
     except Exception as exc:
         logger.warning("detect_delay_risk failed: %s", exc)
@@ -104,7 +104,7 @@ def detect_weather_impact(airline: str = "", days_back: int = 7) -> str:
           {al_clause}
         """
         rows = [dict(r) for r in client.query(sql, job_config=job_config).result()]
-        return json.dumps({"row_count": len(rows), "rows": rows})
+        return json.dumps({"row_count": len(rows), "rows": rows}, default=str)
 
     except Exception as exc:
         logger.warning("detect_weather_impact failed: %s", exc)
@@ -132,7 +132,7 @@ def check_pipeline_health() -> str:
         try:
             rows = [dict(r) for r in client.query(gold_sql).result()]
             if rows and rows[0].get("gold_summary_rows"):
-                return json.dumps({"status": "ok", "source": "gold_layer", "pipeline_data": rows})
+                return json.dumps({"status": "ok", "source": "gold_layer", "pipeline_data": rows}, default=str)
         except Exception as gold_exc:
             logger.warning("bi_pipeline_refresh_v failed (%s); falling back", gold_exc)
 
@@ -142,7 +142,7 @@ def check_pipeline_health() -> str:
         FROM `{PROJECT_ID}.{BQ_DATASET}.ai_rag_documents`
         """
         rows = [dict(r) for r in client.query(rag_sql).result()]
-        return json.dumps({"status": "ok", "source": "ai_rag_documents", "pipeline_data": rows})
+        return json.dumps({"status": "ok", "source": "ai_rag_documents", "pipeline_data": rows}, default=str)
 
     except Exception as exc:
         return json.dumps({"status": "error", "error": str(exc)})
