@@ -23,6 +23,7 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
   - [Session Memory](#session-memory)
 - [End-to-End Request Flows](#end-to-end-request-flows)
 - [Agentic Layer (LangGraph)](#agentic-layer-langgraph)
+- [Agent Operations Overview](#agent-operations-overview)
 - [Multi-Agent Layer (Google ADK) — Proof of Concept](#multi-agent-layer-google-adk--proof-of-concept)
 - [Coordination Agent — Dynamic Multi-Worker Routing](#coordination-agent--dynamic-multi-worker-routing)
 - [BigQuery Views Reference](#bigquery-views-reference)
@@ -625,6 +626,69 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 | **Latency** | ~2–4 s | ~4–10 s | Adds ~0 ms (no LLM call) |
 | **Response extras** | `context_count`, `facts_count`, `tools_used` | `tools_called`, `tools_used`, `steps` | `routed_to` + all fields from routed endpoint |
 | **Best for** | "What are Delta's delays?" | "Which airline has the worst performance?" | All questions — recommended default |
+
+---
+
+## Agent Operations Overview
+
+Three distinct agent patterns sit on the same underlying GCP data — `/agent` (single-agent LangGraph, detailed above), plus two ADK-based multi-agent patterns detailed in the sections below.
+
+```
+                              User Question
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼               ▼               ▼
+              /agent            /multi-agent     /coordinate
+           (LangGraph)         (ADK Sequential)  (ADK Coordination)
+                    │               │               │
+                    ▼               ▼               ▼
+        ┌──────────────────┐ ┌─────────────────┐ ┌──────────────────┐
+        │ SINGLE AGENT      │ │ FIXED SEQUENCE   │ │ DYNAMIC ROUTING   │
+        │ 1 decision-maker  │ │ no LLM call of   │ │ LLM-powered       │
+        │ loops over 3      │ │ its own — pure   │ │ coordinator       │
+        │ tools, max 4      │ │ control flow      │ │ reasons about     │
+        │ iterations         │ │                  │ │ which workers     │
+        │ (recursion_limit) │ │                  │ │ are relevant      │
+        └─────────┬─────────┘ └────────┬─────────┘ └─────────┬────────┘
+                  │                    │                     │
+                  ▼                    ▼                     ▼
+        ┌──────────────────┐ ┌─────────────────┐ ┌──────────────────┐
+        │ TOOL BELT          │ │ WORKER CHAIN     │ │ WORKER POOL        │
+        │ search_flight_     │ │ risk_analyst     │ │ risk_analyst       │
+        │   records          │ │      │           │ │ weather_analyst    │
+        │ query_analytics    │ │      ▼           │ │ pipeline_health    │
+        │ get_pipeline_      │ │ mitigation_      │ │ mitigation_advisor │
+        │   status            │ │   advisor        │ │ (0-4 called,       │
+        │                    │ │ (always BOTH,    │ │  decided per       │
+        │                    │ │  fixed order)     │ │  question)          │
+        └─────────┬─────────┘ └────────┬─────────┘ └─────────┬────────┘
+                  │                    │                     │
+                  └────────────────────┼─────────────────────┘
+                                       ▼
+                       ┌───────────────────────────────┐
+                       │   SHARED DATA LAYER             │
+                       │   BigQuery aviation_analytics   │
+                       │   Vertex AI Vector Search        │
+                       └───────────────────────────────┘
+                                       │
+                                       ▼
+                       ┌───────────────────────────────┐
+                       │   RESPONSE                      │
+                       │   tools_called / agents_run /   │
+                       │   workers_called + steps +      │
+                       │   token_usage                   │
+                       └───────────────────────────────┘
+```
+
+### When ops would use each
+
+| Endpoint | Example question | Why |
+|---|---|---|
+| `/agent` | "Which airline is worst this week?" | Single question, needs reasoning across 1–3 tools |
+| `/multi-agent` | "Delta is delayed on BOS-EWR — what should ops do?" | Known fixed workflow: ALWAYS detect risk, THEN recommend |
+| `/coordinate` | "Is the data fresh?" / "Is this weather or scheduling?" / "What should ops do?" | Same entry point, different questions need different specialist combinations — coordinator decides per-request |
+
+All three patterns return **verified live results** (see the detailed sections below) and differ only in how much reasoning happens about orchestration itself — none additional (LangGraph picks tools within one agent), zero (fixed sequence, no LLM decides order), or full (coordinator reasons about relevance).
 
 ---
 
