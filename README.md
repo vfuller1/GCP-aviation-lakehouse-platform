@@ -664,6 +664,48 @@ Worker 2 has a hard dependency on Worker 1's output — it cannot recommend miti
 
 > **Verified**: Tested locally against `google-adk==2.3.0` — `Agent`, `SequentialAgent`, `Runner`, and `InMemorySessionService` field names and signatures all match this module's usage. Authentication forces Vertex AI (service account) mode via `GOOGLE_GENAI_USE_VERTEXAI` rather than ADK's default Gemini API key lookup, matching how `agent.py` and `retrieval_service.py` already authenticate. Full execution requires GCP Application Default Credentials (present on Cloud Run, not on a bare local machine).
 
+> **Verified live on Cloud Run**: `risk_analyst` queried real BigQuery data (168.0 min avg delay, 11.1% weather-related) and `mitigation_advisor` correctly cited those exact numbers when recommending "escalate to operations for a schedule/crew review" — confirming the handoff actually passes data, not just control flow.
+
+### Monitoring — Cloud Trace, Monitoring, Logging (ADK-native)
+
+Unlike the LangGraph layer, which needed a hand-built pipeline (structured logs → Cloud Logging sink → BigQuery views → Looker Studio, see [Monitoring Dashboard](#monitoring-dashboard)), ADK ships OpenTelemetry instrumentation natively. Enabling GCP export is one function call in `multi_agent/telemetry.py`:
+
+```python
+from google.adk.telemetry.google_cloud import get_gcp_exporters
+from google.adk.telemetry.setup import maybe_set_otel_providers
+
+hooks = get_gcp_exporters(
+    enable_cloud_tracing=True,
+    enable_cloud_metrics=True,
+    enable_cloud_logging=True,
+)
+maybe_set_otel_providers([hooks])
+```
+
+| What you get | Where to see it |
+|---|---|
+| Full span per agent run — `risk_analyst`'s tool call latency, `mitigation_advisor`'s turn, total chain duration | Cloud Trace |
+| Token usage and request count metrics, auto-exported | Cloud Monitoring |
+| Structured log entries per agent turn | Cloud Logging |
+
+Fails silently (logs a warning, doesn't crash the agent) if GCP Application Default Credentials aren't available — verified locally, where it correctly falls back without breaking agent construction.
+
+### Eval
+
+`google.adk.evaluation` ships a full evaluation framework (`AgentEvaluator`, trajectory evaluators, hallucination detection, LLM-as-judge) driven by `.test.json` eval-set files. Its `Invocation`/`IntermediateData` schema is involved enough that hand-authoring correct eval-set files without running them against real GCP credentials risked shipping broken fixtures — so this module ships a **lightweight custom eval harness** (`multi_agent/eval.py`) instead, checking the three things that matter most for this specific chain:
+
+| Check | What it proves |
+|---|---|
+| **Trajectory** | `agents_run == ["risk_analyst", "mitigation_advisor"]` — the sequential handoff actually happened |
+| **Grounding** | The final answer cites a real number from Worker 1's BigQuery output — proves Worker 2 used Worker 1's data, not a generic answer |
+| **Correctness** | The final decision matches an independently-recomputed version of the documented decision rule — catches the agent silently deviating from its own instructions |
+
+```bash
+python -m multi_agent.eval
+```
+
+> **Next step**: migrate these checks into ADK's native `AgentEvaluator` + `.test.json` eval sets once there's time to validate the full `Invocation` schema against real agent runs — the custom harness above is the pragmatic stand-in, not the long-term answer.
+
 ---
 
 ## CI/CD Workflows

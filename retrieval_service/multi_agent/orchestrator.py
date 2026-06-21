@@ -44,8 +44,14 @@ from google.genai import types
 
 from .worker_risk import risk_analyst
 from .worker_mitigation import mitigation_advisor
+from .telemetry import enable_gcp_telemetry
 
 logger = logging.getLogger(__name__)
+
+# Enable Cloud Trace/Monitoring/Logging for every agent run in this process.
+# Fails silently (logs a warning) if GCP credentials aren't available, e.g.
+# during local unit testing without ADC configured.
+enable_gcp_telemetry()
 
 APP_NAME = "aviation-disruption-response"
 
