@@ -620,6 +620,55 @@ User question
         Final answer returned
 ```
 
+### How the Super-Agent Is Used in This Project
+
+The super-agent (`disruption_response_orchestrator`) is a **coordinator, not a domain expert** — it has no BigQuery tool, no decision rules, and no knowledge of aviation delays. Its only three jobs are: run workers in the right order, hand each worker's output to the next, and return the final worker's response.
+
+```
+                    ┌──────────────────────────────────────┐
+                    │      SUPER-AGENT (SequentialAgent)     │
+                    │      disruption_response_orchestrator  │
+                    │                                        │
+                    │  Job 1: SEQUENCE                       │
+                    │    run sub_agents in declared order     │
+                    │    [risk_analyst, mitigation_advisor]   │
+                    │                                        │
+                    │  Job 2: HANDOFF                         │
+                    │    pass each agent's output forward     │
+                    │    as the next agent's input            │
+                    │                                        │
+                    │  Job 3: RETURN                          │
+                    │    final sub-agent's response           │
+                    │    becomes the orchestrator's response  │
+                    └────────────────┬───────────────────────┘
+                                     │  delegates to, in order:
+                    ┌────────────────┼────────────────┐
+                    ▼                                 ▼
+          ┌──────────────────┐              ┌──────────────────────┐
+          │  Worker 1         │   output →   │  Worker 2             │
+          │  risk_analyst     │ ───────────► │  mitigation_advisor   │
+          │  HAS a BQ tool    │              │  HAS no tools —       │
+          │  detects risk     │              │  reasons over Worker  │
+          │                   │              │  1's output only     │
+          └──────────────────┘              └──────────────────────┘
+```
+
+**Why this matters architecturally**: the super-agent pattern scales by adding workers, not by making the orchestrator smarter. Today it sequences 2 workers. Extending to a 3-worker "Daily Ops Briefing" (Risk Analyst + Weather Analyst + Pipeline Health, run in parallel via `ParallelAgent` instead of `SequentialAgent`) requires zero changes to either worker — only the orchestrator's composition changes:
+
+```python
+# Today: SequentialAgent — workers depend on each other
+disruption_response_orchestrator = SequentialAgent(
+    sub_agents=[risk_analyst, mitigation_advisor],
+)
+
+# Extension: ParallelAgent — workers are independent, fan-out/fan-in
+daily_briefing_orchestrator = ParallelAgent(
+    sub_agents=[risk_analyst, weather_analyst, pipeline_health],
+)
+```
+
+This is the core idea behind a "super-agent + specialized worker agents" topology: the super-agent's composition type (`Sequential` vs `Parallel`) encodes the *dependency structure* of the problem, while each worker stays a small, focused, independently-testable unit.
+
 ### Code structure
 
 ```
