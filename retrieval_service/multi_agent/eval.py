@@ -22,6 +22,20 @@ agent chain, using plain Python assertions against the live system:
                    would produce, independently recomputed here from the
                    same BigQuery numbers Worker 1 saw?
 
+A second eval suite, eval_coordination_routing(), covers /coordinate
+(coordinator.py). Unlike the fixed chain above, the correct workers_called
+genuinely VARIES per question — there's no single hardcoded expectation.
+So these checks assert routing CONSTRAINTS instead of an exact list:
+  - "is the data fresh" must call pipeline_health and NOTHING else
+    (calling risk_analyst/weather_analyst here would be wasted work)
+  - a mitigation question must call mitigation_advisor AFTER risk_analyst
+    (the data dependency the coordinator must respect)
+  - a pure weather question must NOT call mitigation_advisor
+    (no action was requested, so recommending one is overreach)
+
+These thresholds were calibrated against verified live Cloud Run runs
+(see README "Coordination Agent" section) — not invented in the abstract.
+
 Run with:  python -m multi_agent.eval
 Requires GCP Application Default Credentials (Cloud Run, Cloud Shell, or
 `gcloud auth application-default login` locally).
@@ -31,6 +45,7 @@ import json
 import re
 
 from .orchestrator import run
+from .coordinator import run as run_coordinator
 from .tools import detect_delay_risk
 
 
@@ -107,15 +122,69 @@ EVAL_CASES = [
 ]
 
 
+def eval_coordination_routing(question: str, constraint: str, **kwargs) -> dict:
+    """Run one /coordinate eval case and check a routing CONSTRAINT
+    (not an exact list, since the correct set of workers varies)."""
+    report = {"question": question, "checks": {}}
+    result = run_coordinator(question)
+    called = result["workers_called"]
+    report["workers_called"] = called
+    report["answer"] = result["answer"]
+
+    if constraint == "exactly_pipeline_health":
+        report["checks"]["routing"] = (
+            "PASS" if called == ["pipeline_health"]
+            else f"FAIL — expected exactly ['pipeline_health'], got {called}"
+        )
+
+    elif constraint == "mitigation_after_risk":
+        has_both = "risk_analyst" in called and "mitigation_advisor" in called
+        ordered = has_both and called.index("risk_analyst") < called.index("mitigation_advisor")
+        report["checks"]["routing"] = (
+            "PASS" if ordered
+            else f"FAIL — expected risk_analyst before mitigation_advisor, got {called}"
+        )
+
+    elif constraint == "no_mitigation_for_pure_weather":
+        report["checks"]["routing"] = (
+            "PASS" if "mitigation_advisor" not in called and "weather_analyst" in called
+            else f"FAIL — expected weather_analyst without mitigation_advisor, got {called}"
+        )
+
+    return report
+
+
+COORDINATION_EVAL_CASES = [
+    {"question": "Is the data fresh?",
+     "constraint": "exactly_pipeline_health"},
+    {"question": "Delta is delayed on BOS-EWR — what should ops do?",
+     "constraint": "mitigation_after_risk"},
+    {"question": "Is Delta's BOS-EWR delay weather or scheduling related?",
+     "constraint": "no_mitigation_for_pure_weather"},
+]
+
+
 def main():
-    print(f"Running {len(EVAL_CASES)} eval case(s) against the live Disruption Response Chain...\n")
     all_passed = True
+
+    print(f"Running {len(EVAL_CASES)} eval case(s) against the live Disruption Response Chain...\n")
     for case in EVAL_CASES:
         report = eval_disruption_response_chain(**case)
         print(f"Question: {report['question']}")
         if "skipped" in report["checks"]:
             print(f"  SKIPPED: {report['checks']['skipped']}\n")
             continue
+        for check_name, result in report["checks"].items():
+            print(f"  {check_name:12s}: {result}")
+            if result.startswith("FAIL"):
+                all_passed = False
+        print()
+
+    print(f"Running {len(COORDINATION_EVAL_CASES)} eval case(s) against the live coordination agent...\n")
+    for case in COORDINATION_EVAL_CASES:
+        report = eval_coordination_routing(**case)
+        print(f"Question: {report['question']}")
+        print(f"  workers_called: {report['workers_called']}")
         for check_name, result in report["checks"].items():
             print(f"  {check_name:12s}: {result}")
             if result.startswith("FAIL"):

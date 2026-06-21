@@ -808,9 +808,19 @@ Fails silently (logs a warning, doesn't crash the agent) if GCP Application Defa
 | **Grounding** | The final answer cites a real number from Worker 1's BigQuery output — proves Worker 2 used Worker 1's data, not a generic answer |
 | **Correctness** | The final decision matches an independently-recomputed version of the documented decision rule — catches the agent silently deviating from its own instructions |
 
+**`eval_coordination_routing()`** extends this harness to `/coordinate`. Unlike the fixed chain above, the correct `workers_called` genuinely varies per question — there's no single hardcoded expectation — so these checks assert **routing constraints** instead of an exact list, calibrated against the verified live results in the Coordination Agent section above:
+
+| Check | Constraint |
+|---|---|
+| Pure freshness question | `workers_called` must be **exactly** `["pipeline_health"]` — calling anything else is wasted work |
+| Mitigation question | `risk_analyst` must appear **before** `mitigation_advisor` — respects the data dependency |
+| Pure weather question | `mitigation_advisor` must **not** be called — no action was requested, recommending one is overreach |
+
 ```bash
 python -m multi_agent.eval
 ```
+
+Runs both eval suites — the fixed Disruption Response Chain and the dynamic coordination routing — against the live deployed system.
 
 > **Next step**: migrate these checks into ADK's native `AgentEvaluator` + `.test.json` eval sets once there's time to validate the full `Invocation` schema against real agent runs — the custom harness above is the pragmatic stand-in, not the long-term answer.
 
