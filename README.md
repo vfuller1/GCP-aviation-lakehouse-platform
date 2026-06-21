@@ -2,7 +2,7 @@
 
 ![GCP Aviation Lakehouse Platform](images/intro%20picture%20for%20the%20readme2.jpg)
 
-A fully automated, cloud-native data lakehouse built on Google Cloud Platform that ingests synthetic aviation flight data, applies medallion-architecture transformations, and surfaces analytics through two AI layers — a **Gemini-powered RAG retrieval service** (`/retrieve`) and a **LangGraph agentic reasoning loop** (`/agent`) — all triggered from a single `git push`.
+A fully automated, cloud-native data lakehouse built on Google Cloud Platform that ingests synthetic aviation flight data, applies medallion-architecture transformations, and surfaces analytics through multiple AI layers — a **Gemini-powered RAG retrieval service** (`/retrieve`), a **LangGraph single-agent reasoning loop** (`/agent`), two **Google ADK multi-agent patterns** — fixed sequential (`/multi-agent`) and dynamic coordination (`/coordinate`) — and a heuristic **router** (`/ask`) that auto-selects between RAG and the LangGraph agent. All triggered from a single `git push`.
 
 ---
 
@@ -26,7 +26,6 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 - [Agent Operations Overview](#agent-operations-overview)
 - [Multi-Agent Layer (Google ADK) — Proof of Concept](#multi-agent-layer-google-adk--proof-of-concept)
 - [Coordination Agent — Dynamic Multi-Worker Routing](#coordination-agent--dynamic-multi-worker-routing)
-- [BigQuery Views Reference](#bigquery-views-reference)
 - [CI/CD Workflows](#cicd-workflows)
 - [End-to-End Runtime Sequence](#end-to-end-runtime-sequence)
 - [Quick Start / Testing](#quick-start--testing)
@@ -35,6 +34,8 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 - [Monitoring Dashboard](#monitoring-dashboard)
 - [Prerequisites & Secrets](#prerequisites--secrets)
 - [Configuration Variables](#configuration-variables)
+- [BigQuery Views Reference](#bigquery-views-reference)
+- [License](#license)
 
 ---
 
@@ -77,8 +78,18 @@ The platform follows the **Medallion Architecture** (Bronze / Silver / Gold):
 │       └── requirements.txt
 ├── retrieval_service/
 │   ├── Dockerfile                     # Python 3.11 retrieval service container
-│   ├── retrieval_service.py           # Flask RAG service (Gemini 2.5 Flash)
-│   ├── agent.py                       # LangGraph agentic layer (3 tools, autonomous loop)
+│   ├── retrieval_service.py           # Flask app: /ask, /retrieve, /agent, /multi-agent, /coordinate
+│   ├── agent.py                       # LangGraph single-agent layer (3 tools, autonomous loop)
+│   ├── multi_agent/                   # Google ADK multi-agent proof-of-concept
+│   │   ├── tools.py                   # detect_delay_risk, detect_weather_impact, check_pipeline_health
+│   │   ├── worker_risk.py             # Risk Analyst ADK Agent
+│   │   ├── worker_mitigation.py       # Mitigation Advisor ADK Agent
+│   │   ├── worker_weather.py          # Weather Analyst ADK Agent
+│   │   ├── worker_pipeline.py         # Pipeline Health ADK Agent
+│   │   ├── orchestrator.py            # SequentialAgent — /multi-agent (fixed routing)
+│   │   ├── coordinator.py             # LLM-powered Agent — /coordinate (dynamic routing)
+│   │   ├── telemetry.py               # ADK-native Cloud Trace/Monitoring/Logging export
+│   │   └── eval.py                    # Trajectory/grounding/correctness + routing constraint checks
 │   └── requirements.txt
 ├── tests/
 │   ├── test_retrieval_e2e.py          # E2E smoke tests for retrieval service
@@ -349,7 +360,7 @@ A Vertex AI Vector Search **index** (`aviation-rag-index`) is built from the `ai
 
 ### Retrieval Service
 
-A Flask application deployed on **Cloud Run** (`aviation-retrieval`) exposes three AI endpoints backed by two distinct reasoning paths.
+A Flask application deployed on **Cloud Run** (`aviation-retrieval`) exposes 8 endpoints backed by 4 distinct reasoning paths (RAG, LangGraph single-agent, ADK fixed multi-agent, ADK dynamic coordination agent).
 
 **Base URL**: `https://aviation-retrieval-ohvijuloea-uc.a.run.app`
 
@@ -360,7 +371,11 @@ A Flask application deployed on **Cloud Run** (`aviation-retrieval`) exposes thr
 | `/ask` | POST | **Unified router** — auto-routes to `/retrieve` or `/agent`; response includes `routed_to` and `tools_used` |
 | `/retrieve` | POST | **Simple path** — fixed pipeline: embed → Vector Search → Gemini (1 Gemini call) |
 | `/agent` | POST | **Complex path** — LangGraph loop: autonomous tool selection, multi-step reasoning |
+| `/multi-agent` | POST | **ADK fixed multi-agent** — Risk Analyst → Mitigation Advisor, always both, fixed order (see [Multi-Agent Layer](#multi-agent-layer-google-adk--proof-of-concept)) |
+| `/coordinate` | POST | **ADK dynamic coordination agent** — reasons about which of 4 workers to call per question (see [Coordination Agent](#coordination-agent--dynamic-multi-worker-routing)) |
 | `/session/clear` | POST | Clear Firestore session history |
+
+> `/ask` only routes between `/retrieve` and `/agent` — it does not route to `/multi-agent` or `/coordinate`. Those are called directly. See [Agent Operations Overview](#agent-operations-overview) for a full comparison of all 3 agent endpoints.
 
 ---
 
@@ -528,7 +543,7 @@ ANSWER      : Delta (DL) had the worst on-time performance — 100% delayed on
 
 ### Session Memory
 
-Conversation history is stored in **Firestore** (`rag-sessions` database). Both `/retrieve` and `/agent` append each Q&A turn to `sessions/{session_id}`, enabling follow-up questions that reference prior answers. Sessions expire automatically after 1 hour (TTL on `expireAt`). Pass the same `session_id` across calls to maintain context.
+Conversation history is stored in **Firestore** (`rag-sessions` database). All 4 agent/RAG endpoints — `/retrieve`, `/agent`, `/multi-agent`, and `/coordinate` — append each Q&A turn to `sessions/{session_id}`, enabling follow-up questions that reference prior answers. Sessions expire automatically after 1 hour (TTL on `expireAt`). Pass the same `session_id` across calls to maintain context.
 
 Each session document also accumulates a running `token_usage` sub-document across all turns:
 ```json
@@ -813,21 +828,23 @@ The super-agent (`disruption_response_orchestrator`) is a **coordinator, not a d
           └──────────────────┘              └──────────────────────┘
 ```
 
-**Why this matters architecturally**: the super-agent pattern scales by adding workers, not by making the orchestrator smarter. Today it sequences 2 workers. Extending to a 3-worker "Daily Ops Briefing" (Risk Analyst + Weather Analyst + Pipeline Health, run in parallel via `ParallelAgent` instead of `SequentialAgent`) requires zero changes to either worker — only the orchestrator's composition changes:
+**Why this matters architecturally**: the super-agent pattern scales by adding workers, not by making the orchestrator smarter. This orchestrator sequences 2 workers. `weather_analyst` and `pipeline_health` already exist as ADK Agents too — see [Coordination Agent](#coordination-agent--dynamic-multi-worker-routing), where all 4 workers are used together. Wiring those same 2 extra workers into a `ParallelAgent` instead (a "Daily Ops Briefing" running all 3 independent checks at once) is a natural extension that hasn't been built — only the orchestrator's composition would need to change, not the workers themselves:
 
 ```python
-# Today: SequentialAgent — workers depend on each other
+# Built: SequentialAgent — workers depend on each other
 disruption_response_orchestrator = SequentialAgent(
     sub_agents=[risk_analyst, mitigation_advisor],
 )
 
-# Extension: ParallelAgent — workers are independent, fan-out/fan-in
+# Not yet built: ParallelAgent — reusing the SAME risk_analyst, plus the
+# weather_analyst and pipeline_health that already exist (used today by
+# /coordinate) — workers are independent here, fan-out/fan-in
 daily_briefing_orchestrator = ParallelAgent(
     sub_agents=[risk_analyst, weather_analyst, pipeline_health],
 )
 ```
 
-This is the core idea behind a "super-agent + specialized worker agents" topology: the super-agent's composition type (`Sequential` vs `Parallel`) encodes the *dependency structure* of the problem, while each worker stays a small, focused, independently-testable unit.
+This is the core idea behind a "super-agent + specialized worker agents" topology: the super-agent's composition type (`Sequential` vs `Parallel`) encodes the *dependency structure* of the problem, while each worker stays a small, focused, independently-testable unit — the same 4 workers already get reused across both `/multi-agent` and `/coordinate` below.
 
 ### Code structure
 
@@ -835,13 +852,18 @@ This is the core idea behind a "super-agent + specialized worker agents" topolog
 retrieval_service/
 └── multi_agent/
     ├── __init__.py
-    ├── tools.py              # detect_delay_risk() — BigQuery query, scoped for risk detection
+    ├── tools.py              # detect_delay_risk, detect_weather_impact, check_pipeline_health
     ├── worker_risk.py        # Risk Analyst ADK Agent — detects & quantifies
     ├── worker_mitigation.py  # Mitigation Advisor ADK Agent — recommends action
-    └── orchestrator.py       # SequentialAgent wiring + run() entrypoint
+    ├── worker_weather.py     # Weather Analyst ADK Agent — used by /coordinate
+    ├── worker_pipeline.py    # Pipeline Health ADK Agent — used by /coordinate
+    ├── orchestrator.py       # SequentialAgent wiring + run() — this section's /multi-agent
+    ├── coordinator.py        # LLM-powered Agent wiring — see Coordination Agent section
+    ├── telemetry.py          # Cloud Trace/Monitoring/Logging export, shared by both endpoints
+    └── eval.py               # Eval harness, covers both /multi-agent and /coordinate
 ```
 
-This module is fully isolated — it does not modify `agent.py`, `retrieval_service.py`'s existing endpoints, or any Terraform-provisioned infrastructure. It reuses the same `aviation_analytics` BigQuery dataset the rest of the platform already provisions.
+This module is fully isolated — it does not modify `agent.py`, `retrieval_service.py`'s existing endpoints, or any Terraform-provisioned infrastructure. It reuses the same `aviation_analytics` BigQuery dataset the rest of the platform already provisions. `worker_risk.py` and `worker_mitigation.py` power this section's `/multi-agent`; all 4 workers together power `/coordinate`, detailed in the next section.
 
 ### Endpoint
 
@@ -869,7 +891,7 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/multi-agent \
 
 ### Why SequentialAgent, not ParallelAgent
 
-Worker 2 has a hard dependency on Worker 1's output — it cannot recommend mitigation before risk has been quantified. This is the right pattern when workers depend on each other. A **fan-out/fan-in** design (`ParallelAgent`) would instead be used for independent workers — e.g. a "Daily Ops Briefing" combining a Risk Analyst, a Weather Analyst, and a Pipeline Health check that don't depend on each other's output, where running them in parallel and synthesizing at the end is faster than running them one after another.
+Worker 2 has a hard dependency on Worker 1's output — it cannot recommend mitigation before risk has been quantified. This is the right pattern when workers depend on each other. A **fan-out/fan-in** design (`ParallelAgent`) would instead be used for independent workers — e.g. a "Daily Ops Briefing" running Risk Analyst, Weather Analyst, and Pipeline Health in parallel and synthesizing at the end, since none of them depend on each other's output. All 3 of those workers already exist (`weather_analyst` and `pipeline_health` are used today by [`/coordinate`](#coordination-agent--dynamic-multi-worker-routing)) — only the `ParallelAgent` wiring itself hasn't been built.
 
 > **Verified**: Tested locally against `google-adk==2.3.0` — `Agent`, `SequentialAgent`, `Runner`, and `InMemorySessionService` field names and signatures all match this module's usage. Authentication forces Vertex AI (service account) mode via `GOOGLE_GENAI_USE_VERTEXAI` rather than ADK's default Gemini API key lookup, matching how `agent.py` and `retrieval_service.py` already authenticate. Full execution requires GCP Application Default Credentials (present on Cloud Run, not on a bare local machine).
 
@@ -1239,7 +1261,7 @@ Five guardrail layers are active on every request.
 
 | Layer | Where | What it does |
 |-------|-------|-------------|
-| **Input validation** | `/retrieve` and `/agent` handlers | Rejects malformed input before any GCP call is made |
+| **Input validation** | `/retrieve`, `/agent`, `/multi-agent`, and `/coordinate` handlers | Rejects malformed input before any GCP call is made |
 | **Gemini safety settings** | `reason_with_vertex()` | Blocks harmful content at `BLOCK_MEDIUM_AND_ABOVE` for dangerous content, hate speech, harassment, and sexually explicit categories |
 | **Parameterized BigQuery** | All BQ queries in `retrieval_service.py` and `agent.py` | `@days_back`, `@airline`, `@route` — prevents SQL injection via LLM-supplied or user-supplied values |
 | **Prompt injection defence** | `build_reasoning_prompt()`, agent system prompt, `search_flight_records` | XML-delimited prompt sections + `_sanitise_context()` regex strips instruction-override patterns from all retrieved content |
