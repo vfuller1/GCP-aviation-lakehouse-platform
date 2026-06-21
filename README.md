@@ -41,7 +41,37 @@ A fully automated, cloud-native data lakehouse built on Google Cloud Platform th
 
 ## Architecture Overview
 
-![Architecture Overview](images/Architecture%20Overview.png)
+```
+Git Push
+   │
+   ├─ infra.yml ──► Terraform (ONE provisioning run)
+   │                 GCS · BigQuery · Vertex AI · Firestore · GKE · Cloud Run
+   │
+   └─ pipeline.yml ──► Docker build/push, K8s apply, ingest job,
+                        Databricks Job Trigger (Bronze → Silver → Gold)
+
+GKE Autopilot Ingest Job
+   │
+   ├──► BigQuery ai_rag_documents   (full records + embeddings, MERGE)
+   │
+   └──► GCS batch.json ──► Vector Search index rebuild (BATCH_UPDATE)
+                                              │
+User Request                                 ▼
+   │                              ┌─────────────────────┐
+   ▼                              │   AI / RAG Layer      │
+Cloud Run (retrieval-service)     │  Vector Search         │
+   │                              │  RAG Documents (BQ)    │
+   ├── /ask        router          └─────────┬─────────────┘
+   ├── /retrieve   RAG (Vector Search + cond. BQ fallback)
+   ├── /agent      LangGraph single-agent, 3 tools
+   ├── /multi-agent ADK SequentialAgent, fixed 2-worker chain
+   └── /coordinate  ADK coordination agent, dynamic 4-worker routing
+   │
+   ▼
+Firestore (rag-sessions)
+```
+
+> Terraform never touches Bronze/Silver/Gold data — that's Databricks via `pipeline.yml`. BigQuery and Vector Search are independent parallel write targets from ingest, not a chain.
 
 The platform follows the **Medallion Architecture** (Bronze / Silver / Gold):
 
@@ -563,9 +593,31 @@ Each session document also accumulates a running `token_usage` sub-document acro
 
 ## End-to-End Request Flows
 
-![AI Layer Request Flows — /retrieve vs /agent](images/AI%20Layer%20Request%20Flows%20-%20RAG%20vs.%20Agent.jpg)
+```
+  /retrieve (RAG)                       /agent (LangGraph)
+  ─────────────────                     ──────────────────
+1. Fixed Embed Prompt                 1. State & history load
+        │                                     │
+        ▼                                     ▼
+2. Vector Search                      2. Action (LLM decides: tool or done?)
+        │                                     │
+        ▼                                  ┌──┴──┐
+3. VS >= 3 results?                       yes     no
+   ├── YES → skip BQ                       │       │
+   └── NO  → BQ fallback query             ▼       ▼
+        │                            3. Execute  6. Final Answer
+        ▼                               Tool        (END)
+4. Gemini 2.5 Flash                       │
+   (struct answer gen)                    ▼
+        │                            4. Append result to state
+        ▼                                  │
+5. Persist session                         └──► loop back to step 2
+        │                              (max 4 tool calls, recursion_limit=10)
+        ▼
+6. Grounded Answer  ──────┬──────────────────────────────► Firestore (rag-sessions)
+```
 
-The `/ask` router classifies every question with a zero-latency heuristic and forwards to the right path. Simple, scoped questions go to `/retrieve` (fixed pipeline, 1 Gemini call). Comparative, ranking, or multi-step questions go to `/agent` (LangGraph loop, autonomous tool selection). The `routed_to` and `tools_used` fields in every response show exactly which path ran and which data sources were queried.
+The `/ask` router classifies every question with a zero-latency heuristic and forwards to the right path. Simple, scoped questions go to `/retrieve` (fixed pipeline, 1 Gemini call, BigQuery only if Vector Search returns < 3 results). Comparative, ranking, or multi-step questions go to `/agent` (LangGraph loop, autonomous tool selection). The `routed_to` and `tools_used` fields in every response show exactly which path ran and which data sources were queried.
 
 ---
 
@@ -1480,7 +1532,33 @@ In `infra.yml`, `enable_gke` and `enable_vertex_ai` are both set to `"true"` via
 
 ## BigQuery Views Reference
 
-![BigQuery Views and Analytics Schema](images/BigQuery%20Views%20and%20Analytics%20Schema.jpg)
+```
+                     aviation_analytics dataset
+┌──────────────────────────────────┬──────────────────────────────────┐
+│   BI Views (query gold_summary_ext) │  AI Views (query ai_rag_documents) │
+│                                      │                                    │
+│  bi_airline_performance_v           │  ai_delay_explanations_v           │
+│    avg delay by airline             │    Gemini-generated explanations   │
+│                                      │                                    │
+│  bi_route_performance_v             │  ai_route_risk_v                    │
+│    KPIs by ORIGIN→DEST route        │    route-level risk scores         │
+│                                      │                                    │
+│  bi_daily_delays_v                  │  ai_nl_analytics_facts_v            │
+│    delayed flights per day          │    NL analytics facts (ingest)     │
+│                                      │                                    │
+│  bi_pipeline_refresh_v              │                                    │
+│    data freshness / row counts      │                                    │
+└──────────────────────────────────┴──────────────────────────────────┘
+                     │                              │
+                     ▼                              ▼
+        Native Table: ai_rag_documents      Vertex AI Vector Search Index
+                     │                              │
+                     └──────────────┬───────────────┘
+                                    ▼
+                     Looker Studio  ──►  Cloud Run (retrieval-service)
+```
+
+> No BigQuery ML is used anywhere in this project — all 7 views above are standard SQL views, queried directly by `query_analytics` (agent tools) and Looker Studio.
 
 All views live in the `aviation_analytics` dataset.
 
