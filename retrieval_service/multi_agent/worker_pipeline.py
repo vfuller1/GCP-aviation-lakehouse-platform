@@ -23,6 +23,10 @@ Report:
   - Whether the Gold layer (Databricks export) or the native RAG table
     answered the query (source field) — note if Gold layer data is stale
     or unavailable
+
+If the tool returns status "error", report the EXACT error message from
+the tool's "error" field verbatim in your answer — do not paraphrase or
+hide it. This detail is needed for debugging.
 """
 
 pipeline_health = Agent(
