@@ -815,14 +815,15 @@ curl -s -X POST $BASE/coordinate \
 
 ### Multi-step vs. multi-agent — the distinction this module demonstrates
 
-`/agent` (LangGraph) is **single-agent, multi-step**: one decision-maker loops through up to 3 tools, choosing which to call and when to stop. `/multi-agent` (ADK) is genuinely **multi-agent**: two distinct agents with different roles, where the second agent's input is the first agent's output — a real dependency chain, not just tool selection.
+`/agent` (LangGraph) is **single-agent, multi-step**: one decision-maker loops through up to 3 tools, choosing which to call and when to stop. `/multi-agent` (ADK) is genuinely **multi-agent**: two distinct agents with different roles, where the second agent's input is the first agent's output — a real dependency chain, not just tool selection. `/coordinate` (also ADK, detailed in the next section) takes this further — an LLM-powered coordinator decides which of 4 workers are even relevant per question, rather than always running a fixed list.
 
 ```
-                    /agent (LangGraph)              /multi-agent (ADK)
-                    ───────────────────              ──────────────────
-                    1 decision-maker                 2 agents, distinct roles
-                    loops over 3 tools                Worker 1 → Worker 2 (sequential handoff)
-                    "which tool do I need?"           "detect risk" → "recommend action"
+     /agent (LangGraph)         /multi-agent (ADK)              /coordinate (ADK)
+     ───────────────────         ──────────────────              ──────────────────
+     1 decision-maker            2 agents, distinct roles         LLM-powered coordinator
+     loops over 3 tools          Worker 1 → Worker 2               + 4 workers, 1-4 called
+     "which tool do I need?"     (sequential handoff, fixed)       per question (dynamic)
+                                 "detect risk" → "recommend"       "which workers are relevant?"
 ```
 
 ### Architecture — Disruption Response Chain
