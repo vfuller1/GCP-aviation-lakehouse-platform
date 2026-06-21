@@ -201,6 +201,64 @@ pipeline.yml  (Databricks Job Trigger)
 
 Generates **5,000 synthetic flight records** per run and writes to the Bronze bucket. Also generates Vertex AI embeddings and writes RAG documents to BigQuery.
 
+### Ingestion Flow
+
+```
+GKE Autopilot CronJob  (daily @ 06:00 UTC, or one-off via pipeline.yml)
+                    │
+                    ▼
+     Generate 5,000 synthetic flight records
+     (NUM_RECORDS=5000, BAD_DATA_RATE=0.02 — 2% intentionally corrupted)
+                    │
+                    ▼
+     Write raw CSV  ──────────────────────────────►  GCS Bronze bucket
+                    │                                 gs://{project}-bronze/
+                    │                                 aviation/raw/date=YYYY-MM-DD/
+                    │
+                    ▼
+     ENABLE_RAG_DOC_EXPORT=true?
+                    │
+                    ▼ yes
+     Build natural-language sentence per record
+     e.g. "Flight DL123 ATL→LAX delayed 45min, weather-related"
+                    │
+                    ▼
+     Write NL sentences as NDJSON  ───────────────►  GCS AI bucket (intermediate)
+     (no embeddings yet)                             gs://{project}-ai/
+                    │                                 (read back in next step)
+                    ▼
+     ENABLE_VERTEX_EMBEDDINGS=true?
+                    │
+                    ▼ yes
+     Call Vertex AI text-embedding-005
+     batches of 5, with retry on failure
+                    │
+                    ▼
+     768-dim embedding generated per record
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+   MERGE into BigQuery   Write batch.json
+   ai_rag_documents      {id, embedding} only
+   (full record +        ──────────────────►  GCS AI bucket
+    768-dim embedding)                         gs://{project}-ai/aviation/
+          │                                    indices/rag/batch.json
+          │                                              │
+          │                                              ▼
+          │                                    PATCH Vertex AI API
+          │                                    triggers BATCH_UPDATE
+          │                                              │
+          │                                              ▼
+          │                                    Vector Search index
+          │                                    rebuilds (1-2 hours)
+          ▼                                              ▼
+   Available immediately                      Available after rebuild
+   for BigQuery fallback                       for /retrieve and /agent
+   queries                                      semantic search
+```
+
+> **Note**: BigQuery MERGE and the `batch.json` write are **parallel outputs** of the same embedding step, not a chain — BigQuery never feeds Vector Search. BigQuery is immediately query-able; Vector Search needs the BATCH_UPDATE rebuild window.
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `flight_id` | UUID | Unique flight identifier |
