@@ -659,7 +659,16 @@ The `/agent` endpoint wraps the same GCP tools in a **LangGraph `StateGraph`** �
 # Single-turn agentic query
 curl -s -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
   -H "Content-Type: application/json" \
-  -d '{"question": "Which airline should I avoid if flying into ATL this week due to weather delays?", "session_id": "demo-agent-1"}' \
+  -d '{"question": "Which airline has the most weather-related delays this week?", "session_id": "demo-agent-2"}' \
+  | python3 -m json.tool
+```
+
+```bash
+# Multi-turn: follow-up uses Firestore session history — note the question
+# never names an airline; the agent must pull it from session history
+curl -s -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "For that same airline, which specific routes are worst affected?", "session_id": "demo-agent-2"}' \
   | python3 -c "
 import sys, json; d = json.load(sys.stdin)
 print('TOOLS CALLED:', d.get('tools_called'))
@@ -667,24 +676,14 @@ print('STEPS       :', d.get('steps'))
 print('ANSWER      :', d.get('answer',''))"
 ```
 
-```bash
-# Multi-turn: follow-up uses Firestore session history
-curl -s -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What about routes out of LAX for the same airline?", "session_id": "demo-agent-1"}' \
-  | python3 -c "
-import sys, json; d = json.load(sys.stdin)
-print('TOOLS CALLED:', d.get('tools_called'))
-print('STEPS       :', d.get('steps'))
-print('ANSWER      :', d.get('answer',''))"
-```
+> **Why this question works better than a destination-only filter** (e.g. "weather delays into ATL"): `query_analytics`'s `route` parameter expects a full `ORIGIN-DEST` pair, not just a destination airport. Asking for "the most weather-related delays" instead uses the `weather` query type directly, with no parameter the tool can't express — it resolves in 2–3 tool calls instead of retrying 4 times before giving up.
 
 **Response shape:**
 ```json
 {
-  "question":     "Which airline should I avoid ...",
+  "question":     "Which airline has the most weather-related delays this week?",
   "answer":       "Based on 7-day analytics data, Spirit Airlines (NK) shows the highest average departure delay of 47.2 minutes and a 34% delayed flight rate...",
-  "session_id":   "demo-agent-1",
+  "session_id":   "demo-agent-2",
   "tools_called": ["query_analytics", "search_flight_records"],
   "steps":        5,
   "token_usage":  {"prompt_tokens": 2841, "response_tokens": 418, "total_tokens": 3259},
