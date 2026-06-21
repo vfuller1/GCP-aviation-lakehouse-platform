@@ -631,6 +631,16 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/agent \
 
 ## Agent Operations Overview
 
+The service exposes **3 agent endpoints** in total — the original single-agent `/agent` (LangGraph, detailed above) plus 2 new ADK-based multi-agent endpoints added this session. All other endpoints (`/health`, `/health/ready`, `/ask`, `/retrieve`, `/session/clear`) are not agent-based — `/retrieve` is a fixed pipeline with no agent loop, and `/ask` is a heuristic router.
+
+| Endpoint | Agent type | Added |
+|---|---|---|
+| `/agent` | LangGraph single-agent, 3 tools, loops up to 4 iterations | Original |
+| `/multi-agent` | ADK `SequentialAgent` — fixed 2-worker handoff | This session |
+| `/coordinate` | ADK coordination agent — dynamic 4-worker routing | This session |
+
+> **Important**: `/ask` only routes between `/retrieve` and `/agent` — it does **not** route to `/multi-agent` or `/coordinate`. Those two are separate endpoints you call directly; they are not part of `/ask`'s decision space.
+
 Three distinct agent patterns sit on the same underlying GCP data — `/agent` (single-agent LangGraph, detailed above), plus two ADK-based multi-agent patterns detailed in the sections below.
 
 ```
@@ -689,6 +699,33 @@ Three distinct agent patterns sit on the same underlying GCP data — `/agent` (
 | `/coordinate` | "Is the data fresh?" / "Is this weather or scheduling?" / "What should ops do?" | Same entry point, different questions need different specialist combinations — coordinator decides per-request |
 
 All three patterns return **verified live results** (see the detailed sections below) and differ only in how much reasoning happens about orchestration itself — none additional (LangGraph picks tools within one agent), zero (fixed sequence, no LLM decides order), or full (coordinator reasons about relevance).
+
+### How to call all 3 agent endpoints
+
+```bash
+BASE=https://aviation-retrieval-ohvijuloea-uc.a.run.app
+
+# 1. /agent — single LangGraph agent, picks 1-3 tools autonomously
+curl -s -X POST $BASE/agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Which airline has the worst on-time performance this week?", "session_id": "demo-agent"}'
+
+# 2. /multi-agent — fixed 2-worker chain, always Risk Analyst -> Mitigation Advisor
+curl -s -X POST $BASE/multi-agent \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Delta is showing high delays on BOS-EWR - what should operations do?", "session_id": "demo-multi"}'
+
+# 3. /coordinate — dynamic routing across 4 workers, varies per question
+curl -s -X POST $BASE/coordinate \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Is the data fresh?", "session_id": "demo-coord"}'
+```
+
+| Endpoint | Look for in the response |
+|---|---|
+| `/agent` | `tools_called`, `steps`, `token_usage` |
+| `/multi-agent` | `agents_run` (always `["risk_analyst", "mitigation_advisor"]`) |
+| `/coordinate` | `workers_called` (varies — 1 to 4 workers depending on the question) |
 
 ---
 
