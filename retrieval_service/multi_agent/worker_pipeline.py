@@ -36,7 +36,10 @@ results.
 
 pipeline_health = Agent(
     name="pipeline_health",
-    model="gemini-2.5-flash",
+    # flash-lite, not flash: this worker's job is a single tool call +
+    # verbatim status report, no multi-step reasoning -- a candidate for
+    # a cheaper model. Compare token cost via `python -m multi_agent.eval`.
+    model="gemini-2.5-flash-lite",
     description="Checks data pipeline freshness and health from BigQuery.",
     instruction=PIPELINE_HEALTH_INSTRUCTION,
     tools=[check_pipeline_health],
