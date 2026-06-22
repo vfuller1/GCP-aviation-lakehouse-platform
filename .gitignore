@@ -6,3 +6,7 @@
 *.tfstate
 *.tfstate.backup
 .terraform.lock.hcl
+
+# Ignore Python bytecode cache
+__pycache__/
+*.pyc
