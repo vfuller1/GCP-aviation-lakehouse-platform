@@ -1027,7 +1027,45 @@ Question: Delta is delayed on BOS-EWR — what should ops do?
 
 This is **not** a pass/fail check — the three architectures don't do equivalent work by design (one tool-calling agent vs. a fixed 2-agent handoff vs. 1-4 dynamically chosen workers), so there's nothing to assert correctness against. It exists to make the cost/architecture tradeoff concrete in a demo instead of describing it in the abstract.
 
+> **Verified live, run-to-run variance is real**: across 3 separate live runs of this same question, `/agent`'s `tools_called` varied (1, then 3, then 2 tools — 1,745 / 5,448 / 3,293 tokens) and the cheapest architecture flipped between runs (`/multi-agent` cheapest once, `/coordinate` cheapest another time). This isn't a bug — LLM tool selection isn't perfectly deterministic — which is exactly why the pass/fail checks above assert *constraints* (order, routing rules, token ceilings) rather than exact output matching.
+
 > **Next step**: migrate the pass/fail checks into ADK's native `AgentEvaluator` + `.test.json` eval sets once there's time to validate the full `Invocation` schema against real agent runs — the custom harness above is the pragmatic stand-in, not the long-term answer.
+
+### Troubleshooting eval failures
+
+| Failure | What it means | First check |
+|---|---|---|
+| `trajectory: FAIL — got [...]` | `agents_run` wasn't `["risk_analyst", "mitigation_advisor"]` in order — an agent didn't run, ran twice, or `SequentialAgent` didn't enforce order. Likely an ADK version drift in event/author behavior, or a transient model error stopping the chain early. | Re-run once (a flaky model call is common). If it repeats, print `agents_run` directly and inspect `orchestrator.py`'s `sub_agents=[...]` order. |
+| `grounding: FAIL — expected one of [...], answer had [...]` | The answer didn't cite Worker 1's exact number — Worker 2 likely paraphrased/rounded it instead of quoting it verbatim. | Print `result["answer"]` in full. If the number is present but reformatted (e.g. "151 minutes" vs `151.2`), it's a check-strictness issue — loosen the match, not a real bug. |
+| `correctness: FAIL — expected '...', answer: ...` | The recommendation didn't match the documented decision rule in `worker_mitigation.py`. | Read the printed answer. If the decision is right but worded differently, add a keyword to `_DECISION_KEYWORDS`. If the decision itself is wrong, that's a real prompt/instruction bug. |
+| `token_budget: FAIL — N tokens exceeds ceiling` | The one to take seriously — usually a real runaway: a tool-call loop, a model retry storm, or an unusually verbose response. | Check `agents_run`/`workers_called` for repeated entries (same agent appearing many times = loop); check Cloud Trace/Logging for that request if telemetry is wired. |
+| `routing: FAIL — expected ..., got [...]` | The coordinator called the wrong worker(s). LLM-based routing isn't 100% deterministic, especially on borderline questions. | Re-run the same question 2-3 times. Consistently wrong → tighten `COORDINATOR_INSTRUCTION`. Occasionally wrong → an honest limitation; production fix would be a confidence threshold or a rule-based fallback router. |
+
+**General first move for any `FAIL`**: re-run once before debugging — Gemini calls have natural variance, and a single flaky run isn't a regression. If you instead see a stack trace (not a clean `FAIL` line) — auth or import errors — check Application Default Credentials (`gcloud auth application-default login`) and `pip install -r requirements.txt` first.
+
+### Model selection — swapping a worker to a cheaper model
+
+Not every worker needs the same model. `pipeline_health` does one tool call and reports the result verbatim — no multi-step reasoning — making it a good candidate for `gemini-2.5-flash-lite` instead of `gemini-2.5-flash`. The other 3 workers (`risk_analyst`, `mitigation_advisor`, `weather_analyst`) stay on full `flash` since they make an actual judgment call, where a wrong answer is a correctness risk, not just a cost one.
+
+Process used to validate the swap (the same process to follow for any future model change):
+1. Change the `model=` string in the worker's `Agent(...)` definition.
+2. Re-run `python -m multi_agent.eval` — compare `total_tokens`, and confirm `routing`/`token_budget`/`correctness` still `PASS`.
+3. Repeat 2-3 times — a single run doesn't separate a real regression from normal Gemini variance.
+
+Verified live result: `pipeline_health` on `flash-lite` cost 936-942 tokens for the "Is the data fresh?" case across 3 runs, vs. 950 on full `flash` — a modest (~1.5%) but real and consistent saving, with `routing` and `token_budget` passing every time. The saving is small because most of that question's tokens are the **coordinator's own** routing/synthesis call (still on full `flash`) — downgrading one worker only moves the needle on that worker's share of the total.
+
+### Vertex AI Tuning — when to go further than model selection
+
+Swapping which off-the-shelf model an agent uses (above) is different from **fine-tuning** a model's weights — fine-tuning is a much bigger lever, reserved for when prompting has already failed: the model understands a task but applies it *inconsistently* across runs even with a well-written instruction (this project's `correctness` checks currently pass consistently with plain prompting, so fine-tuning isn't warranted here today).
+
+If it were needed, the process on GCP is:
+1. **Collect labeled examples** — input/correct-output pairs covering the target behavior, including edge cases (for this project: the borderline `weather_pct`/`avg_delay_min` thresholds in `_expected_decision()`).
+2. **Format as JSONL** and upload to Cloud Storage.
+3. **Launch a Vertex AI Supervised Fine-Tuning job** against a base Gemini model (`gcloud ai tuning-jobs create` or the `aiplatform` SDK).
+4. **Point the agent at the resulting tuned model endpoint** — swap the `Agent(model=...)` string, same mechanism as the flash/flash-lite swap above.
+5. **Re-run the eval harness against the tuned model** to prove it actually improved `correctness`/`grounding` — same before/after discipline as any model change.
+
+Tradeoff: fine-tuning is the most expensive, slowest-to-iterate lever — cheaper fixes (better prompts, few-shot examples, splitting an overloaded agent into two specialized ones) should be exhausted first. A tuned model is also a versioned artifact that needs retraining whenever the underlying decision rule changes, unlike a prompt edit.
 
 ---
 
