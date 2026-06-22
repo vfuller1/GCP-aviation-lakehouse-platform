@@ -881,10 +881,11 @@ def multi_agent_query():
     Response JSON:
     {
         "question":   "...",
-        "answer":     "...",
-        "agents_run": ["risk_analyst", "mitigation_advisor"],
-        "session_id": "...",
-        "timestamp":  "..."
+        "answer":       "...",
+        "agents_run":   ["risk_analyst", "mitigation_advisor"],
+        "total_tokens": 0,
+        "session_id":   "...",
+        "timestamp":    "..."
     }
     """
     try:
@@ -909,11 +910,12 @@ def multi_agent_query():
             append_session_turn(session_id, question, result["answer"], {})
 
         return jsonify({
-            "question":   question,
-            "answer":     result["answer"],
-            "agents_run": result["agents_run"],
-            "session_id": session_id,
-            "timestamp":  datetime.utcnow().isoformat() + "Z",
+            "question":     question,
+            "answer":       result["answer"],
+            "agents_run":   result["agents_run"],
+            "total_tokens": result["total_tokens"],
+            "session_id":   session_id,
+            "timestamp":    datetime.utcnow().isoformat() + "Z",
         }), 200
 
     except Exception as e:
@@ -944,6 +946,7 @@ def coordinate_query():
         "question":       "...",
         "answer":         "...",
         "workers_called": ["risk_analyst", "weather_analyst"],
+        "total_tokens":   0,
         "session_id":     "...",
         "timestamp":      "..."
     }
@@ -973,6 +976,7 @@ def coordinate_query():
             "question":       question,
             "answer":         result["answer"],
             "workers_called": result["workers_called"],
+            "total_tokens":   result["total_tokens"],
             "session_id":     session_id,
             "timestamp":      datetime.utcnow().isoformat() + "Z",
         }), 200

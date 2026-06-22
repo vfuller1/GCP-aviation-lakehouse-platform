@@ -21,6 +21,9 @@ agent chain, using plain Python assertions against the live system:
                    decision rule (in worker_mitigation.py's instruction)
                    would produce, independently recomputed here from the
                    same BigQuery numbers Worker 1 saw?
+  4. Token budget — did the run stay under a sane token ceiling? (catches
+                   a runaway agent loop or unexpectedly verbose prompt
+                   inflating cost — not an exact-match check, just a bound)
 
 A second eval suite, eval_coordination_routing(), covers /coordinate
 (coordinator.py). Unlike the fixed chain above, the correct workers_called
@@ -32,9 +35,20 @@ So these checks assert routing CONSTRAINTS instead of an exact list:
     (the data dependency the coordinator must respect)
   - a pure weather question must NOT call mitigation_advisor
     (no action was requested, so recommending one is overreach)
+Each coordination case also gets the same token-budget check, scaled to
+the number of workers actually called (more workers called legitimately
+costs more tokens, so the ceiling scales with workers_called rather than
+being a single fixed number).
 
 These thresholds were calibrated against verified live Cloud Run runs
 (see README "Coordination Agent" section) — not invented in the abstract.
+
+A third function, eval_architecture_comparison(), runs the SAME question
+through /agent (LangGraph), /multi-agent, and /coordinate and reports what
+each one called plus its token cost, side by side. It is NOT a pass/fail
+check — the three architectures don't do equivalent work by design, so
+there's nothing to assert correctness against. It exists to make the
+cost/architecture tradeoff concrete instead of describing it in the abstract.
 
 Run with:  python -m multi_agent.eval
 Requires GCP Application Default Credentials (Cloud Run, Cloud Shell, or
@@ -65,6 +79,20 @@ _DECISION_KEYWORDS = {
     "escalate_ops":     ["escalate", "schedule", "crew", "operations"],
     "no_action":        ["no action", "normal", "within"],
 }
+
+# Generous per-model-call ceiling — wide enough to not flag normal prompt/
+# response variance, tight enough to catch a genuinely runaway agent (e.g.
+# the recursion_limit bug previously found in agent.py's LangGraph loop).
+_TOKENS_PER_CALL_CEILING = 4000
+
+
+def _check_token_budget(total_tokens: int, num_calls: int) -> str:
+    ceiling = _TOKENS_PER_CALL_CEILING * num_calls
+    if total_tokens <= 0:
+        return f"FAIL — got {total_tokens} tokens, expected > 0"
+    if total_tokens > ceiling:
+        return f"FAIL — {total_tokens} tokens exceeds ceiling {ceiling} ({num_calls} calls)"
+    return f"PASS — {total_tokens} tokens (ceiling {ceiling} for {num_calls} calls)"
 
 
 def eval_disruption_response_chain(question: str, airline: str = "", route: str = "") -> dict:
@@ -109,6 +137,11 @@ def eval_disruption_response_chain(question: str, airline: str = "", route: str 
         else f"FAIL — expected '{expected}' (keywords {keywords}), answer: {answer[:200]}"
     )
 
+    # Check 4 — Token budget: this chain is always exactly 2 model calls
+    # (risk_analyst, mitigation_advisor), so the ceiling is fixed here.
+    report["checks"]["token_budget"] = _check_token_budget(result["total_tokens"], num_calls=2)
+    report["total_tokens"] = result["total_tokens"]
+
     report["ground_truth"] = top_row
     report["answer"] = result["answer"]
     return report
@@ -151,6 +184,14 @@ def eval_coordination_routing(question: str, constraint: str, **kwargs) -> dict:
             else f"FAIL — expected weather_analyst without mitigation_advisor, got {called}"
         )
 
+    # Token budget scales with workers actually called (+1 for the
+    # coordinator's own routing/synthesis calls), since that legitimately
+    # varies per question by design.
+    report["checks"]["token_budget"] = _check_token_budget(
+        result["total_tokens"], num_calls=len(called) + 1
+    )
+    report["total_tokens"] = result["total_tokens"]
+
     return report
 
 
@@ -164,6 +205,56 @@ COORDINATION_EVAL_CASES = [
 ]
 
 
+def eval_architecture_comparison(question: str) -> dict:
+    """Run the same question through /agent (LangGraph), /multi-agent
+    (ADK fixed chain), and /coordinate (ADK dynamic routing) and report
+    what each one called + how many tokens it cost.
+
+    This is NOT a pass/fail correctness check — the three architectures
+    don't do equivalent work by design (one tool-calling agent vs. a fixed
+    2-agent handoff vs. 1-4 dynamically chosen workers), so there's no
+    single "correct" answer to assert against. It's a cost/architecture
+    comparison, useful for showing the tradeoff directly rather than
+    describing it in the abstract.
+    """
+    import agent as aviation_agent
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+    report = {"question": question}
+
+    # /agent — LangGraph single agent looping over N tools.
+    messages = [SystemMessage(content=aviation_agent.SYSTEM_PROMPT), HumanMessage(content=question)]
+    agent_result = aviation_agent.run(messages)
+    agent_tools_called = [m.name for m in agent_result["messages"] if hasattr(m, "name") and m.name]
+    agent_tokens = 0
+    for msg in agent_result["messages"]:
+        if isinstance(msg, AIMessage):
+            um = (getattr(msg, "response_metadata", None) or {}).get("usage_metadata", {})
+            agent_tokens += um.get("total_token_count", 0)
+    report["agent"] = {"tools_called": agent_tools_called, "total_tokens": agent_tokens}
+
+    # /multi-agent — ADK fixed SequentialAgent (always risk -> mitigation).
+    multi_result = run(question)
+    report["multi_agent"] = {
+        "agents_run": multi_result["agents_run"],
+        "total_tokens": multi_result["total_tokens"],
+    }
+
+    # /coordinate — ADK dynamic coordinator (1-4 workers depending on question).
+    coord_result = run_coordinator(question)
+    report["coordinate"] = {
+        "workers_called": coord_result["workers_called"],
+        "total_tokens": coord_result["total_tokens"],
+    }
+
+    return report
+
+
+COMPARISON_CASES = [
+    "Delta is delayed on BOS-EWR — what should ops do?",
+]
+
+
 def main():
     all_passed = True
 
@@ -174,6 +265,7 @@ def main():
         if "skipped" in report["checks"]:
             print(f"  SKIPPED: {report['checks']['skipped']}\n")
             continue
+        print(f"  total_tokens: {report.get('total_tokens')}")
         for check_name, result in report["checks"].items():
             print(f"  {check_name:12s}: {result}")
             if result.startswith("FAIL"):
@@ -185,10 +277,24 @@ def main():
         report = eval_coordination_routing(**case)
         print(f"Question: {report['question']}")
         print(f"  workers_called: {report['workers_called']}")
+        print(f"  total_tokens  : {report['total_tokens']}")
         for check_name, result in report["checks"].items():
             print(f"  {check_name:12s}: {result}")
             if result.startswith("FAIL"):
                 all_passed = False
+        print()
+
+    print(f"Running {len(COMPARISON_CASES)} architecture comparison case(s) "
+          "(/agent vs /multi-agent vs /coordinate — no pass/fail, cost comparison only)...\n")
+    for question in COMPARISON_CASES:
+        report = eval_architecture_comparison(question)
+        print(f"Question: {report['question']}")
+        print(f"  /agent       (LangGraph)   tools_called={report['agent']['tools_called']}  "
+              f"total_tokens={report['agent']['total_tokens']}")
+        print(f"  /multi-agent (ADK fixed)   agents_run={report['multi_agent']['agents_run']}  "
+              f"total_tokens={report['multi_agent']['total_tokens']}")
+        print(f"  /coordinate  (ADK dynamic) workers_called={report['coordinate']['workers_called']}  "
+              f"total_tokens={report['coordinate']['total_tokens']}")
         print()
 
     print("=" * 50)

@@ -804,8 +804,8 @@ curl -s -X POST $BASE/coordinate \
 | Endpoint | Look for in the response |
 |---|---|
 | `/agent` | `tools_called`, `steps`, `token_usage` |
-| `/multi-agent` | `agents_run` (always `["risk_analyst", "mitigation_advisor"]`) |
-| `/coordinate` | `workers_called` (varies — 1 to 4 workers depending on the question) |
+| `/multi-agent` | `agents_run` (always `["risk_analyst", "mitigation_advisor"]`), `total_tokens` |
+| `/coordinate` | `workers_called` (varies — 1 to 4 workers depending on the question), `total_tokens` |
 
 ---
 
@@ -947,11 +947,12 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/multi-agent \
 **Response shape**:
 ```json
 {
-  "question":   "Delta is showing high delays on BOS-EWR — what should operations do?",
-  "answer":     "Delta's BOS-EWR delays are not primarily weather-driven (14%) — recommend escalating to operations for a schedule/crew review rather than treating this as a weather event.",
-  "agents_run": ["risk_analyst", "mitigation_advisor"],
-  "session_id": "demo-multi-agent",
-  "timestamp":  "2026-06-20T12:00:00Z"
+  "question":     "Delta is showing high delays on BOS-EWR — what should operations do?",
+  "answer":       "Delta's BOS-EWR delays are not primarily weather-driven (14%) — recommend escalating to operations for a schedule/crew review rather than treating this as a weather event.",
+  "agents_run":   ["risk_analyst", "mitigation_advisor"],
+  "total_tokens": 1842,
+  "session_id":   "demo-multi-agent",
+  "timestamp":    "2026-06-20T12:00:00Z"
 }
 ```
 
@@ -989,13 +990,16 @@ Fails silently (logs a warning, doesn't crash the agent) if GCP Application Defa
 
 ### Eval
 
-`google.adk.evaluation` ships a full evaluation framework (`AgentEvaluator`, trajectory evaluators, hallucination detection, LLM-as-judge) driven by `.test.json` eval-set files. Its `Invocation`/`IntermediateData` schema is involved enough that hand-authoring correct eval-set files without running them against real GCP credentials risked shipping broken fixtures — so this module ships a **lightweight custom eval harness** (`multi_agent/eval.py`) instead, checking the three things that matter most for this specific chain:
+`google.adk.evaluation` ships a full evaluation framework (`AgentEvaluator`, trajectory evaluators, hallucination detection, LLM-as-judge) driven by `.test.json` eval-set files. Its `Invocation`/`IntermediateData` schema is involved enough that hand-authoring correct eval-set files without running them against real GCP credentials risked shipping broken fixtures — so this module ships a **lightweight custom eval harness** (`multi_agent/eval.py`) instead, checking the four things that matter most for this specific chain:
 
 | Check | What it proves |
 |---|---|
 | **Trajectory** | `agents_run == ["risk_analyst", "mitigation_advisor"]` — the sequential handoff actually happened |
 | **Grounding** | The final answer cites a real number from Worker 1's BigQuery output — proves Worker 2 used Worker 1's data, not a generic answer |
 | **Correctness** | The final decision matches an independently-recomputed version of the documented decision rule — catches the agent silently deviating from its own instructions |
+| **Token budget** | `total_tokens` (summed from each ADK `Event.usage_metadata` across the run) stays under a per-call ceiling — catches a runaway agent loop or cost blowup |
+
+`orchestrator.run()` and `coordinator.run()` both now return a `total_tokens` field (also surfaced in the `/multi-agent` and `/coordinate` API responses) by summing `usage_metadata.total_token_count` off every ADK event — the same mechanism `/retrieve`/`/agent` use for their `token_usage` field, just sourced from ADK's `Runner` events instead of LangGraph's.
 
 **`eval_coordination_routing()`** extends this harness to `/coordinate`. Unlike the fixed chain above, the correct `workers_called` genuinely varies per question — there's no single hardcoded expectation — so these checks assert **routing constraints** instead of an exact list, calibrated against the verified live results in the Coordination Agent section above:
 
@@ -1004,6 +1008,7 @@ Fails silently (logs a warning, doesn't crash the agent) if GCP Application Defa
 | Pure freshness question | `workers_called` must be **exactly** `["pipeline_health"]` — calling anything else is wasted work |
 | Mitigation question | `risk_analyst` must appear **before** `mitigation_advisor` — respects the data dependency |
 | Pure weather question | `mitigation_advisor` must **not** be called — no action was requested, recommending one is overreach |
+| Token budget | `total_tokens` stays under `4000 × (workers_called + 1)` — the ceiling scales with workers called, since calling more workers legitimately costs more |
 
 ```bash
 python -m multi_agent.eval
@@ -1011,7 +1016,18 @@ python -m multi_agent.eval
 
 Runs both eval suites — the fixed Disruption Response Chain and the dynamic coordination routing — against the live deployed system.
 
-> **Next step**: migrate these checks into ADK's native `AgentEvaluator` + `.test.json` eval sets once there's time to validate the full `Invocation` schema against real agent runs — the custom harness above is the pragmatic stand-in, not the long-term answer.
+A third function, `eval_architecture_comparison()`, runs the **same question** through `/agent` (LangGraph), `/multi-agent`, and `/coordinate` and reports what each one called plus its token cost, side by side:
+
+```
+Question: Delta is delayed on BOS-EWR — what should ops do?
+  /agent       (LangGraph)   tools_called=['query_analytics']                      total_tokens=612
+  /multi-agent (ADK fixed)   agents_run=['risk_analyst', 'mitigation_advisor']      total_tokens=1842
+  /coordinate  (ADK dynamic) workers_called=['risk_analyst', 'mitigation_advisor']  total_tokens=2100
+```
+
+This is **not** a pass/fail check — the three architectures don't do equivalent work by design (one tool-calling agent vs. a fixed 2-agent handoff vs. 1-4 dynamically chosen workers), so there's nothing to assert correctness against. It exists to make the cost/architecture tradeoff concrete in a demo instead of describing it in the abstract.
+
+> **Next step**: migrate the pass/fail checks into ADK's native `AgentEvaluator` + `.test.json` eval sets once there's time to validate the full `Invocation` schema against real agent runs — the custom harness above is the pragmatic stand-in, not the long-term answer.
 
 ---
 
@@ -1087,6 +1103,7 @@ curl -X POST https://aviation-retrieval-ohvijuloea-uc.a.run.app/coordinate \
   "question":       "Is Delta's BOS-EWR delay weather or scheduling related?",
   "answer":         "Delta flights on BOS-EWR show 14.4% weather-affected with 110.2 min avg delay vs 111.3 min for non-weather flights — weather is not a significant driver.",
   "workers_called": ["weather_analyst"],
+  "total_tokens":   968,
   "session_id":     "demo-coord-2",
   "timestamp":      "2026-06-21T12:00:00Z"
 }

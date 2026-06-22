@@ -74,6 +74,7 @@ async def _run_async(question: str, user_id: str = "demo-user") -> dict:
     content = types.Content(role="user", parts=[types.Part(text=question)])
     final_answer = ""
     agents_run = []
+    total_tokens = 0
 
     async for event in runner.run_async(
         user_id=user_id, session_id=session.id, new_message=content
@@ -83,15 +84,21 @@ async def _run_async(question: str, user_id: str = "demo-user") -> dict:
         # agents_run reflects which AGENTS ran, not how many events each emitted.
         if getattr(event, "author", None) and (not agents_run or agents_run[-1] != event.author):
             agents_run.append(event.author)
+        # usage_metadata is attached once per completed model call (not per
+        # streamed chunk), so summing across events gives the run's total —
+        # one risk_analyst call + one mitigation_advisor call here.
+        if event.usage_metadata and event.usage_metadata.total_token_count:
+            total_tokens += event.usage_metadata.total_token_count
         if event.is_final_response() and event.content and event.content.parts:
             final_answer = event.content.parts[0].text
 
-    return {"answer": final_answer, "agents_run": agents_run}
+    return {"answer": final_answer, "agents_run": agents_run, "total_tokens": total_tokens}
 
 
 def run(question: str) -> dict:
     """Synchronous entrypoint matching agent.py's run() signature.
 
-    Returns: {"answer": str, "agents_run": ["risk_analyst", "mitigation_advisor"]}
+    Returns: {"answer": str, "agents_run": ["risk_analyst", "mitigation_advisor"],
+              "total_tokens": int}
     """
     return asyncio.run(_run_async(question))

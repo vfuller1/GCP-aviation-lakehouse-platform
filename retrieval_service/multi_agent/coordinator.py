@@ -105,6 +105,7 @@ async def _run_async(question: str, user_id: str = "demo-user") -> dict:
     content = types.Content(role="user", parts=[types.Part(text=question)])
     final_answer = ""
     workers_called = []
+    total_tokens = 0
 
     async for event in runner.run_async(
         user_id=user_id, session_id=session.id, new_message=content
@@ -116,16 +117,22 @@ async def _run_async(question: str, user_id: str = "demo-user") -> dict:
                 fc = getattr(part, "function_call", None)
                 if fc and fc.name not in workers_called:
                     workers_called.append(fc.name)
+        # usage_metadata is attached once per completed model call — the
+        # coordinator's own routing/synthesis calls plus each worker AgentTool
+        # invocation, so this totals everything the question actually cost.
+        if event.usage_metadata and event.usage_metadata.total_token_count:
+            total_tokens += event.usage_metadata.total_token_count
         if event.is_final_response() and event.content and event.content.parts:
             final_answer = event.content.parts[0].text
 
-    return {"answer": final_answer, "workers_called": workers_called}
+    return {"answer": final_answer, "workers_called": workers_called, "total_tokens": total_tokens}
 
 
 def run(question: str) -> dict:
     """Synchronous entrypoint matching orchestrator.py's run() signature.
 
-    Returns: {"answer": str, "workers_called": [names of workers actually invoked]}
+    Returns: {"answer": str, "workers_called": [names of workers actually invoked],
+              "total_tokens": int}
     Unlike orchestrator.run()'s agents_run (always both, fixed order),
     workers_called varies per question — that's the point of this module.
     """
