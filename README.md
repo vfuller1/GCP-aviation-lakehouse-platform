@@ -380,13 +380,20 @@ Reads Silver and Gold Delta tables and writes **flat Parquet** (no `partitionBy`
 
 ### Embeddings Pipeline
 
-During ingest, each flight record is summarized into a natural-language sentence and embedded using **Vertex AI `text-embedding-005`** (768-dimensional). These embeddings are written to the `ai_rag_documents` BigQuery native table with metadata fields for retrieval.
+During ingest, each flight record is summarized into a natural-language sentence and embedded using **Vertex AI `text-embedding-005`** (768-dimensional). Each embedding is computed **once** in `pipeline/ingest/ingest.py` and then written to **two separate destinations**, because each is optimized for a different kind of query:
+
+| Destination | Format | Used for |
+|---|---|---|
+| `ai_rag_documents` (BigQuery **native** table) | `embedding` column, `FLOAT64 REPEATED` | SQL filtering by airline/route/date, and as the [BigQuery fallback](#bigquery-fallback) target when a primary query fails |
+| `gs://{project_id}-ai/aviation/indices/rag/batch.json` (GCS) | One JSON line per doc — `{"id": ..., "embedding": [...]}` | Feeds the Vertex AI Vector Search index (below) — BigQuery isn't built for efficient nearest-neighbor vector search at scale, so the index needs its own copy in its own format |
 
 ### Vector Search
 
-A Vertex AI Vector Search **index** (`aviation-rag-index`) is built from the `ai_rag_documents` embeddings and deployed to an endpoint (`aviation-rag-endpoint`). The retrieval service queries this endpoint using cosine similarity (DOT_PRODUCT on normalized vectors) to find the most relevant flight records for a given question.
+A Vertex AI Vector Search **index** (`aviation-rag-index`) is built from the GCS-staged embeddings (`contents_delta_uri = gs://{project_id}-ai/aviation/indices/rag/`) and deployed to an endpoint (`aviation-rag-endpoint`). The retrieval service queries this endpoint using cosine similarity (DOT_PRODUCT on normalized vectors) to find the most relevant flight records for a given question.
 
 > **Note**: The Vector Search index runs in BATCH_UPDATE mode. After a large ingest, allow 1–2 hours for the index to rebuild.
+
+> **Architecture clarification — GCS vs. BigQuery roles in this project**: GCS is the only true source of *raw* data (the Silver/Gold Parquet exports written by Databricks); BigQuery's `silver_flights_ext`/`gold_summary_ext` are **external tables** with zero storage of their own — pure SQL windows onto those same GCS files, not copies. `ai_rag_documents`, by contrast, **is** a real, separate, persisted copy inside BigQuery — but it's not a backup of the GCS data: it holds *derived* data (embeddings + restructured RAG text) computed from the flight records for a different purpose (semantic search / fallback), and it's only ever upserted (`MERGE` by `doc_id`), never truncated — rows persist and accumulate across ingest runs.
 
 ### Retrieval Service
 
