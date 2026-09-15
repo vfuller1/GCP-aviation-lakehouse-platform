@@ -159,7 +159,7 @@ Three GCS buckets are created with uniform bucket-level access:
 
 ### GKE Autopilot Cluster
 
-Enabled when `enable_gke = true` (set via the `TF_VAR_enable_gke` GitHub secret in `infra.yml`).
+Enabled when `enable_gke = true` (for example, by flipping `TF_VAR_enable_gke` in `infra.yml`).
 
 | Resource | Name | Notes |
 |----------|------|-------|
@@ -1602,7 +1602,7 @@ Defined in `variables.tf`:
 | `databricks_token` | `null` | Databricks PAT (sensitive) |
 | `databricks_account_id` | `null` | Databricks account ID |
 
-In `infra.yml`, `enable_gke` and `enable_vertex_ai` are both set to `"true"` via `TF_VAR_*` environment variables.
+In `infra.yml`, `enable_gke` is set to `"false"` and `enable_vertex_ai` is set to `"true"` via `TF_VAR_*` environment variables.
 
 ---
 
